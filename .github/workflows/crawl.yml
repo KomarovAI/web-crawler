@@ -41,9 +41,9 @@ jobs:
           domain = url.replace('https://', '').replace('http://', '').split('/')[0].replace('.', '_')
           db_file = f"{domain}.db"
           
-          print(f"URL: {url}")
+          print(f"\n🕷️ Crawling: {url}")
           print(f"Max pages: {max_pages}")
-          print(f"DB: {db_file}")
+          print(f"DB file: {db_file}\n")
           
           with open('.env', 'w') as f:
             f.write(f"START_URL={url}\n")
@@ -55,12 +55,28 @@ jobs:
           echo "domain=${domain}" >> $GITHUB_OUTPUT
           echo "db_file=${domain}.db" >> $GITHUB_OUTPUT
       
-      - name: Crawl
+      - name: Run crawler
         run: python crawler.py
       
-      - name: Upload DB
+      - name: Check DB
+        run: |
+          if [ -f "${{ steps.site.outputs.db_file }}" ]; then
+            ls -lh ${{ steps.site.outputs.db_file }}
+            sqlite3 ${{ steps.site.outputs.db_file }} "SELECT COUNT(*) FROM pages"
+          fi
+      
+      - name: Upload to artifacts (90 days)
         uses: actions/upload-artifact@v4
         with:
-          name: dbs
+          name: databases
           path: ${{ steps.site.outputs.db_file }}
           retention-days: 90
+      
+      - name: Create release with DB (permanent)
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.site.outputs.db_file }}
+          tag_name: crawl-${{ github.run_number }}-${{ steps.site.outputs.domain }}
+          body: '✅ Crawled: ${{ matrix.site.url }}'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
