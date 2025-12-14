@@ -1,130 +1,65 @@
-## WEB CRAWLER - MINIMAL AI CONTEXT
-Compact project summary for AI model consumption (minimal tokens)
+WEB CRAWLER - ULTRA MINIMAL AI CONTEXT (~250 tokens)
 
-### TECH STACK
-Language: Python 3.11+
-Core libs: aiohttp (3.9.1), beautifulsoup4 (4.12.2), python-dotenv (1.0.0)
-Async: asyncio native
-DB: None (in-memory)
-Format: Single-file async app + config
+TECH: Python 3.11, aiohttp, beautifulsoup4, python-dotenv (3 deps only)
 
-### PROJECT SCOPE
-Asynchronous web crawler
-BFS queue-based traversal
-Single domain crawling
-Configurable max pages (default 50)
-No dependencies bloat: 3 packages only
-
-### FILES STRUCTURE
-crawler.py (140 lines)
-  - class Crawler(start_url, max_pages, timeout)
-  - async fetch(session, url) -> HTML|None
-  - async parse(html, base_url) -> links[]
+FILES:
+crawler.py: class Crawler(url, max_p, t)
+  - async fetch(s, url) -> str|None
+  - async parse(h, b) -> list[str]
   - async run() -> {total, urls}
-  - helpers: _extract_domain, _is_valid_url
+  - _ok(url) -> bool (validate: domain, visited, max_p)
 
-config.py (18 lines)
-  - CRAWLER: START_URL, MAX_PAGES, TIMEOUT, BATCH_SIZE
-  - LOGGING: LEVEL, FORMAT
+config.py: START_URL, MAX_PAGES, TIMEOUT env vars
+requirements.txt: aiohttp==3.9.1, beautifulsoup4==4.12.2, python-dotenv==1.0.0
 
-requirements.txt (3 lines)
-  - aiohttp==3.9.1
-  - beautifulsoup4==4.12.2
-  - python-dotenv==1.0.0
+ARCHITECTURE:
+Queue-based BFS -> fetch HTML -> parse links -> validate -> enqueue
+- TCPConnector(limit=5) for concurrent requests
+- asyncio.sleep(0.1) rate limit
+- visited set (O1 lookup)
+- domain filtering
 
-### EXECUTION FLOW
-1. main() -> Crawler(url, max_pages).run()
+ENV VARS:
+START_URL=https://example.com
+MAX_PAGES=50
+TIMEOUT=10
+
+FLOW:
+1. Crawler(url, max_pages) init
 2. run() loop:
-   - Dequeue URL from queue
-   - fetch() with aiohttp
-   - parse() with BeautifulSoup
-   - validate links (domain, visited, max check)
+   - dequeue url
+   - fetch with aiohttp (timeout, ssl=False)
+   - parse with BeautifulSoup (find all <a>)
+   - filter: _ok(url) checks domain+visited+max
    - enqueue new links
-   - await 100ms (rate limit)
-3. Return {total_crawled, all_urls}
+   - sleep 100ms
+3. return {total, urls}
 
-### ENVIRONMENT VARIABLES
-START_URL=https://example.com    # Entry point
-MAX_PAGES=50                      # Hard limit
-TIMEOUT=10                        # Per-request timeout
-LOG_LEVEL=INFO                    # Logging verbosity
+ERROR HANDLING:
+- fetch() returns None on any error (no exceptions)
+- parse() safe BeautifulSoup parsing
+- _ok() filters bad URLs before fetch
+- No bubble-up exceptions
 
-### ARCHITECTURE PATTERNS
-- Queue-based BFS (not DFS)
-- Async/await throughout
-- Single event loop
-- TCPConnector with limit=5 (concurrent requests)
-- Set for visited URLs (O(1) lookup)
-- Domain filtering at parse stage
+PERF:
+- Concurrent: 5 requests
+- Rate: 0.1s between fetches
+- Memory: O(n) visited set
+- Network bound
 
-### SECURITY CONSIDERATIONS
-- .env excluded from git (.gitignore)
-- No credentials in code
-- SSL errors suppressed (http fallback)
-- Type hints for clarity
-- Input validation on URLs
+COMMON MODS:
+1. Headers: session.get(url, headers={...})
+2. Parallelism: TCPConnector(limit=10)
+3. Rate: asyncio.sleep(0.05)
+4. Save: add results export
+5. Extract: expand parse() return
 
-### PERFORMANCE CHARACTERISTICS
-- Concurrent requests: 5 (TCPConnector limit)
-- Request rate: 100ms between fetches
-- Memory: O(n) for visited set + queue
-- Time complexity: O(n) where n = total crawled pages
-- Network bound, not CPU bound
+AVOID:
+- NO requests (use aiohttp)
+- NO Selenium (too heavy)
+- NO sync calls (all async)
+- NO creds in code
+- NO 20+ deps
 
-### ERROR HANDLING
-- fetch() returns None on any error (connection, timeout, content-type)
-- parse() safely extracts links (ignores malformed HTML)
-- Invalid URLs filtered before fetch (domain, visited check)
-- No exceptions bubble up from run()
-
-### TESTING HINTS
-- Mock aiohttp.ClientSession.get()
-- Test URL validation separately
-- Test domain extraction with various URLs
-- Async test with pytest-asyncio
-- No external test fixtures needed
-
-### COMMON MODIFICATIONS
-1. Add headers: session.get(url, headers={...})
-2. Add cookies: session.get(url, cookies={...})
-3. Increase parallelism: TCPConnector(limit=10)
-4. Change rate limit: await asyncio.sleep(0.05)
-5. Filter by URL pattern: _is_valid_url() logic
-6. Extract data: parse() method expansion
-7. Save results: modify run() return or add export
-
-### DEPENDENCIES RATIONALE
-- aiohttp: native async, connection pooling, automatic decompression
-- beautifulsoup4: robust HTML parsing, minimal learning curve
-- python-dotenv: .env file management, 0 config overhead
-- (NOT included) selenium, requests, lxml, asyncpg
-
-### DEPLOYMENT OPTIONS
-1. Local: python crawler.py
-2. Docker: docker-compose up
-3. Scheduled: cron + python script
-4. Cloud: GCP Cloud Run, AWS Lambda (with 15min+ timeout)
-5. Library: import Crawler; await Crawler(...).run()
-
-### TOKEN COUNT ESTIMATE
-crawler.py: ~420 tokens (140 lines * 3 tok/line)
-config.py: ~40 tokens (18 lines)
-requirements.txt: ~10 tokens
-docker: ~30 tokens
-TOTAL CORE: ~500 tokens
-
-### NEXT STEPS FOR AI WORK
-1. For feature: reference crawler.py lines X-Y
-2. For bug: paste full error + relevant code section
-3. For optimization: state current bottleneck
-4. For review: request security/perf/style check
-5. For docs: request docstring generation
-
-### RED FLAGS (WHAT TO AVOID)
-- Do NOT use blocking requests library
-- Do NOT add SQLAlchemy/heavy DB
-- Do NOT include Selenium (too heavy)
-- Do NOT make synchronous calls
-- Do NOT hardcode credentials
-- Do NOT ignore SSL (use real cert checking)
-- Do NOT add 20+ dependencies
+TOKEN COUNT: ~250 for this, ~200 for code = ~450 total
+USAGE: Copy this entire file when asking AI for changes
