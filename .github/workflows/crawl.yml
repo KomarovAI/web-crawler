@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       sites_json:
-        description: 'JSON array: [{"url":"https://example.com","max_pages":50}]'
+        description: 'JSON: [{"url":"https://example.com","max_pages":50}]'
         required: true
         default: '[{"url":"https://example.com","max_pages":50}]'
 
@@ -33,50 +33,41 @@ jobs:
       - name: Setup site
         id: site
         run: |
-          python << 'EOF'
+          python3 << 'PYTHON'
           import json
           site = json.loads('${{ toJson(matrix.site) }}')
           url = site['url']
           max_pages = site.get('max_pages', 50)
           domain = url.replace('https://', '').replace('http://', '').split('/')[0].replace('.', '_')
-          db_file = f"{domain}.db"
-          
-          print(f"\n🕷️ Crawling: {url}")
-          print(f"Max pages: {max_pages}")
-          print(f"DB file: {db_file}\n")
           
           with open('.env', 'w') as f:
             f.write(f"START_URL={url}\n")
             f.write(f"MAX_PAGES={max_pages}\n")
-            f.write(f"DB_FILE={db_file}\n")
-          EOF
+            f.write(f"DB_FILE={domain}.db\n")
           
-          domain=$(python3 -c "import json; site=json.loads('${{ toJson(matrix.site) }}'); url=site['url']; print(url.replace('https://', '').replace('http://', '').split('/')[0].replace('.', '_'))")
+          with open('domain.txt', 'w') as f:
+            f.write(domain)
+          PYTHON
+          
+          domain=$(cat domain.txt)
           echo "domain=${domain}" >> $GITHUB_OUTPUT
           echo "db_file=${domain}.db" >> $GITHUB_OUTPUT
       
       - name: Run crawler
         run: python crawler.py
       
-      - name: Check DB
+      - name: Verify DB
         run: |
           if [ -f "${{ steps.site.outputs.db_file }}" ]; then
-            ls -lh ${{ steps.site.outputs.db_file }}
-            sqlite3 ${{ steps.site.outputs.db_file }} "SELECT COUNT(*) FROM pages"
+            ls -lh "${{ steps.site.outputs.db_file }}"
+            echo "✅ DB created successfully"
           fi
       
-      - name: Upload to artifacts (90 days)
+      - name: Store in artifact (no-zip)
         uses: actions/upload-artifact@v4
         with:
-          name: databases
+          name: db-${{ steps.site.outputs.domain }}
           path: ${{ steps.site.outputs.db_file }}
           retention-days: 90
-      
-      - name: Create release with DB (permanent)
-        uses: softprops/action-gh-release@v1
-        with:
-          files: ${{ steps.site.outputs.db_file }}
-          tag_name: crawl-${{ github.run_number }}-${{ steps.site.outputs.domain }}
-          body: '✅ Crawled: ${{ matrix.site.url }}'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if-no-files-found: error
+          compression-level: 0
