@@ -1,314 +1,66 @@
-name: 🕷️ Universal Web Crawler
+name: 🕷️ Crawl
 
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Mode: single (one site) or batch (multiple sites)'
-        required: true
-        default: 'single'
-        type: choice
-        options:
-          - single
-          - batch
-      
-      url:
-        description: 'Website URL (for single mode)'
-        required: false
-        default: 'https://example.com'
-      
-      max_pages:
-        description: 'Maximum pages to crawl'
-        required: false
-        default: '50'
-      
-      include_assets:
-        description: 'Download images, CSS, JS (true/false)'
-        required: false
-        default: 'true'
-      
       sites_json:
-        description: 'JSON array with sites for batch mode: [{"url":"...","max_pages":50}]'
-        required: false
+        description: 'JSON array: [{"url":"https://example.com","max_pages":50}]'
+        required: true
         default: '[{"url":"https://example.com","max_pages":50}]'
-  
-  schedule:
-    - cron: '0 2 * * *'  # Daily at 2 AM UTC
 
 jobs:
-  setup:
-    runs-on: ubuntu-latest
-    outputs:
-      mode: ${{ steps.detect.outputs.mode }}
-      sites: ${{ steps.detect.outputs.sites }}
-    steps:
-      - name: Detect mode and prepare
-        id: detect
-        run: |
-          # Auto-detect mode from inputs
-          if [ "${{ github.event.inputs.mode }}" = "batch" ]; then
-            MODE="batch"
-            SITES='${{ github.event.inputs.sites_json }}'
-          else
-            MODE="single"
-            SITES='[{"url":"${{ github.event.inputs.url }}","max_pages":${{ github.event.inputs.max_pages }}}]'
-          fi
-          
-          echo "mode=${MODE}" >> $GITHUB_OUTPUT
-          echo "sites=${SITES}" >> $GITHUB_OUTPUT
-          echo "🕷️ Mode: ${MODE}"
-          echo "📍 Sites: ${SITES}"
-  
   crawl:
-    needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       matrix:
-        site: ${{ fromJson(needs.setup.outputs.sites) }}
+        site: ${{ fromJson(github.event.inputs.sites_json) }}
       max-parallel: 3
     
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Install deps
+        run: pip install -r requirements.txt
       
-      - name: Extract site info
+      - name: Setup site
         id: site
         run: |
           python << 'EOF'
           import json
-          import sys
           site = json.loads('${{ toJson(matrix.site) }}')
-          url = site.get('url', 'https://example.com')
+          url = site['url']
           max_pages = site.get('max_pages', 50)
-          domain = url.replace('https://', '').replace('http://', '').split('/')[0]
-          db_file = f"{domain.replace('.', '_')}.db"
+          domain = url.replace('https://', '').replace('http://', '').split('/')[0].replace('.', '_')
+          db_file = f"{domain}.db"
           
           print(f"URL: {url}")
           print(f"Max pages: {max_pages}")
-          print(f"Domain: {domain}")
-          print(f"DB file: {db_file}")
+          print(f"DB: {db_file}")
           
-          with open('site_info.txt', 'w') as f:
-            f.write(f"URL={url}\n")
+          with open('.env', 'w') as f:
+            f.write(f"START_URL={url}\n")
             f.write(f"MAX_PAGES={max_pages}\n")
-            f.write(f"DOMAIN={domain}\n")
             f.write(f"DB_FILE={db_file}\n")
           EOF
           
-          source site_info.txt
-          echo "url=${URL}" >> $GITHUB_OUTPUT
-          echo "max_pages=${MAX_PAGES}" >> $GITHUB_OUTPUT
-          echo "domain=${DOMAIN}" >> $GITHUB_OUTPUT
-          echo "db_file=${DB_FILE}" >> $GITHUB_OUTPUT
+          domain=$(python3 -c "import json; site=json.loads('${{ toJson(matrix.site) }}'); url=site['url']; print(url.replace('https://', '').replace('http://', '').split('/')[0].replace('.', '_'))")
+          echo "domain=${domain}" >> $GITHUB_OUTPUT
+          echo "db_file=${domain}.db" >> $GITHUB_OUTPUT
       
-      - name: Create .env
-        run: |
-          cat > .env << EOF
-          START_URL=${{ steps.site.outputs.url }}
-          MAX_PAGES=${{ steps.site.outputs.max_pages }}
-          TIMEOUT=15
-          USE_DB=true
-          DB_FILE=${{ steps.site.outputs.db_file }}
-          INCLUDE_ASSETS=${{ github.event.inputs.include_assets || 'true' }}
-          EOF
-          cat .env
+      - name: Crawl
+        run: python crawler.py
       
-      - name: Run crawler
-        id: crawl
-        continue-on-error: true
-        run: |
-          echo "🕷️ Starting crawl: ${{ steps.site.outputs.url }}"
-          python crawler.py
-          echo "status=success" >> $GITHUB_OUTPUT
-      
-      - name: Generate report
-        if: steps.crawl.outcome == 'success'
-        run: |
-          python << 'EOF'
-          import sqlite3
-          import json
-          from datetime import datetime
-          
-          db_file = "${{ steps.site.outputs.db_file }}"
-          
-          try:
-            conn = sqlite3.connect(db_file)
-            cursor = conn.cursor()
-            
-            cursor.execute('SELECT COUNT(*) FROM pages')
-            pages = cursor.fetchone()[0]
-            
-            cursor.execute('SELECT SUM(content_length) FROM pages')
-            size = (cursor.fetchone()[0] or 0) / 1024 / 1024
-            
-            cursor.execute('SELECT COUNT(*) FROM assets')
-            assets = cursor.fetchone()[0]
-            
-            cursor.execute('SELECT url, title, content_length FROM pages LIMIT 50')
-            page_list = cursor.fetchall()
-            
-            report = {
-              'domain': "${{ steps.site.outputs.domain }}",
-              'url': "${{ steps.site.outputs.url }}",
-              'timestamp': datetime.now().isoformat(),
-              'pages': pages,
-              'assets': assets,
-              'size_mb': round(size, 2),
-              'status': 'success'
-            }
-            
-            conn.close()
-          except Exception as e:
-            report = {
-              'domain': "${{ steps.site.outputs.domain }}",
-              'url': "${{ steps.site.outputs.url }}",
-              'timestamp': datetime.now().isoformat(),
-              'status': 'error',
-              'error': str(e)
-            }
-          
-          with open('${{ steps.site.outputs.db_file }}.report.json', 'w') as f:
-            json.dump(report, f, indent=2)
-          
-          # Markdown report
-          md = f"""# 📊 Crawl Report
-          
-**Domain:** {report.get('domain', 'N/A')}  
-**URL:** {report.get('url', 'N/A')}  
-**Time:** {report.get('timestamp', 'N/A')}  
-**Status:** {report.get('status', 'N/A')}
-
-## Statistics
-- **Pages:** {report.get('pages', 'N/A')}
-- **Assets:** {report.get('assets', 'N/A')}
-- **Size:** {report.get('size_mb', 'N/A')} MB
-"""
-          
-          with open('${{ steps.site.outputs.db_file }}.report.md', 'w') as f:
-            f.write(md)
-          EOF
-      
-      - name: Upload database
-        if: success()
+      - name: Upload DB
         uses: actions/upload-artifact@v4
         with:
-          name: databases-${{ strategy.job-index }}
+          name: dbs
           path: ${{ steps.site.outputs.db_file }}
           retention-days: 90
-      
-      - name: Upload reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: reports-${{ strategy.job-index }}
-          path: |
-            ${{ steps.site.outputs.db_file }}.report.json
-            ${{ steps.site.outputs.db_file }}.report.md
-          retention-days: 30
-  
-  summary:
-    needs: crawl
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-      
-      - name: Generate summary
-        run: |
-          python << 'EOF'
-          import json
-          import glob
-          from datetime import datetime
-          
-          reports = []
-          for file in glob.glob('reports-*/*.json'):
-            with open(file) as f:
-              reports.append(json.load(f))
-          
-          summary = {
-            'timestamp': datetime.now().isoformat(),
-            'total_sites': len(reports),
-            'successful': len([r for r in reports if r.get('status') == 'success']),
-            'failed': len([r for r in reports if r.get('status') == 'error']),
-            'total_pages': sum(r.get('pages', 0) for r in reports),
-            'total_size_mb': round(sum(r.get('size_mb', 0) for r in reports), 2),
-            'reports': reports
-          }
-          
-          # JSON summary
-          with open('SUMMARY.json', 'w') as f:
-            json.dump(summary, f, indent=2)
-          
-          # Markdown summary
-          md = f"""# 📊 Crawl Summary
-
-**Time:** {summary['timestamp']}  
-**Total Sites:** {summary['total_sites']}  
-**Successful:** {summary['successful']} ✅  
-**Failed:** {summary['failed']} ❌  
-**Total Pages:** {summary['total_pages']}  
-**Total Size:** {summary['total_size_mb']} MB  
-
-## Details
-
-| Domain | Pages | Assets | Size (MB) | Status |
-|--------|-------|--------|-----------|--------|
-"""
-          
-          for report in summary['reports']:
-            domain = report.get('domain', 'unknown')
-            pages = report.get('pages', 'N/A')
-            assets = report.get('assets', 'N/A')
-            size = report.get('size_mb', 'N/A')
-            status = '✅' if report.get('status') == 'success' else '❌'
-            md += f"\n| {domain} | {pages} | {assets} | {size} | {status} |"
-          
-          with open('SUMMARY.md', 'w') as f:
-            f.write(md)
-          
-          print(json.dumps(summary, indent=2))
-          EOF
-      
-      - name: Upload summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary
-          path: |
-            SUMMARY.json
-            SUMMARY.md
-          retention-days: 30
-      
-      - name: Create release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            SUMMARY.md
-            SUMMARY.json
-            databases-*/*.db
-          tag_name: crawl-${{ github.run_number }}
-          body: '✅ Crawl completed successfully'
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Print summary
-        run: |
-          echo "═════════════════════════════════════"
-          echo "🕷️ CRAWL COMPLETED"
-          echo "═════════════════════════════════════"
-          cat SUMMARY.md
-          echo "═════════════════════════════════════"
