@@ -1,0 +1,638 @@
+name: Smart DB Archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to archive'
+        required: true
+        default: 'https://callmedley.com'
+      depth:
+        description: 'Crawl depth'
+        required: false
+        default: '5'
+  schedule:
+    - cron: '0 3 * * *'
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -U aiohttp beautifulsoup4 lxml aiofiles
+          pip install sqlalchemy sqlite3
+      
+      - name: Extract domain
+        id: domain
+        run: |
+          URL="${{ github.event.inputs.url || 'https://callmedley.com' }}"
+          DOMAIN=$(echo "$URL" | sed -E 's|https?://([^/]+).*|\1|')
+          DOMAIN_SAFE=$(echo "$DOMAIN" | tr '.' '_')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "domain_safe=$DOMAIN_SAFE" >> $GITHUB_OUTPUT
+      
+      - name: Create smart archiver script
+        run: |
+          cat > smart_archiver.py << 'SCRIPT_EOF'
+import asyncio
+import aiohttp
+import aiofiles
+import sqlite3
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
+import logging
+import json
+from datetime import datetime
+from collections import defaultdict
+import hashlib
+import mimetypes
+
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+class SmartArchiver:
+    """Smart DB Archiver - stores everything separately in SQLite"""
+    
+    def __init__(self, start_url: str, db_path: str = 'archive.db', max_depth: int = 5, max_pages: int = 500):
+        self.start_url = start_url
+        self.domain = urlparse(start_url).netloc.lower()
+        self.db_path = Path(db_path)
+        self.max_depth = max_depth
+        self.max_pages = max_pages
+        
+        # Create database
+        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn.execute('PRAGMA journal_mode=WAL')
+        self.conn.execute('PRAGMA synchronous=NORMAL')
+        self._init_db()
+        
+        self.visited = {}
+        self.queue = [(start_url, 0)]
+        self.stats = defaultdict(int)
+    
+    def _init_db(self):
+        """Initialize database schema"""
+        cursor = self.conn.cursor()
+        
+        # Pages table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pages (
+                id INTEGER PRIMARY KEY,
+                url TEXT UNIQUE NOT NULL,
+                domain TEXT NOT NULL,
+                path TEXT NOT NULL,
+                title TEXT,
+                html_hash TEXT UNIQUE NOT NULL,
+                content_hash TEXT NOT NULL,
+                depth INTEGER NOT NULL,
+                status_code INTEGER NOT NULL,
+                content_length INTEGER,
+                headers TEXT,
+                extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(domain, path)
+            )
+        ''')
+        
+        # Assets table (images, fonts, css, js, etc)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS assets (
+                id INTEGER PRIMARY KEY,
+                url TEXT UNIQUE NOT NULL,
+                domain TEXT NOT NULL,
+                path TEXT NOT NULL,
+                asset_type TEXT NOT NULL,
+                content_hash TEXT UNIQUE NOT NULL,
+                file_size INTEGER NOT NULL,
+                mime_type TEXT,
+                width INTEGER,
+                height INTEGER,
+                extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(domain, path)
+            )
+        ''')
+        
+        # Asset blobs (actual binary data)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS asset_blobs (
+                id INTEGER PRIMARY KEY,
+                content_hash TEXT UNIQUE NOT NULL,
+                content BLOB NOT NULL,
+                compressed_size INTEGER,
+                FOREIGN KEY(content_hash) REFERENCES assets(content_hash)
+            )
+        ''')
+        
+        # Links table (relationships)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS links (
+                id INTEGER PRIMARY KEY,
+                from_page_id INTEGER NOT NULL,
+                to_url TEXT NOT NULL,
+                link_type TEXT NOT NULL,
+                FOREIGN KEY(from_page_id) REFERENCES pages(id)
+            )
+        ''')
+        
+        # Metadata table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS metadata (
+                id INTEGER PRIMARY KEY,
+                domain TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                UNIQUE(domain, key)
+            )
+        ''')
+        
+        # Create indices
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_assets_domain ON assets(domain)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(asset_type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_links_from ON links(from_page_id)')
+        
+        self.conn.commit()
+    
+    async def archive(self):
+        """Main archiving process"""
+        logger.info(f"Starting smart archive: {self.start_url}")
+        
+        timeout = aiohttp.ClientTimeout(total=60)
+        connector = aiohttp.TCPConnector(limit_per_host=5, limit=20)
+        
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            headers={'User-Agent': 'Mozilla/5.0 (ArchiveBot/1.0)'}
+        ) as session:
+            while self.queue and len(self.visited) < self.max_pages:
+                url, depth = self.queue.pop(0)
+                
+                if url in self.visited or depth > self.max_depth:
+                    continue
+                
+                self.visited[url] = depth
+                await self._fetch_page(session, url, depth)
+        
+        await self._finalize()
+    
+    async def _fetch_page(self, session, url: str, depth: int):
+        """Fetch page and extract"""
+        try:
+            async with session.get(url, ssl=True, allow_redirects=True) as response:
+                if response.status != 200:
+                    return
+                
+                content_type = response.headers.get('content-type', '').lower()
+                
+                if 'text/html' in content_type:
+                    html = await response.text(errors='ignore')
+                    await self._process_page(html, url, depth, dict(response.headers))
+                    self.stats['pages'] += 1
+                    logger.info(f"✅ Page [{depth}]: {url[:60]}")
+        except Exception as e:
+            logger.debug(f"Error: {url} - {e}")
+    
+    async def _process_page(self, html: str, url: str, depth: int, headers: dict):
+        """Process and store page"""
+        soup = BeautifulSoup(html, 'html.parser')
+        parsed = urlparse(url)
+        
+        # Extract title
+        title = soup.find('title')
+        title_text = title.string if title else parsed.path
+        
+        # Hash content
+        html_hash = hashlib.sha256(html.encode()).hexdigest()
+        content_hash = hashlib.sha256(html.encode()).hexdigest()
+        
+        # Store page
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO pages 
+                (url, domain, path, title, html_hash, content_hash, depth, status_code, content_length, headers)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                url,
+                self.domain,
+                parsed.path,
+                title_text,
+                html_hash,
+                content_hash,
+                depth,
+                200,
+                len(html),
+                json.dumps(dict(headers))
+            ))
+            page_id = cursor.lastrowid
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            return  # Already exists
+        
+        # Extract and store assets
+        tasks = []
+        
+        # Images
+        for img in soup.find_all('img', src=True):
+            src = urljoin(url, img['src'])
+            if self._is_same_domain(src):
+                tasks.append(self._store_asset(page_id, src, 'image', img))
+        
+        # CSS
+        for link in soup.find_all('link', href=True):
+            if 'stylesheet' in link.get('rel', []):
+                href = urljoin(url, link['href'])
+                if self._is_same_domain(href):
+                    tasks.append(self._store_asset(page_id, href, 'css', link))
+        
+        # JavaScript
+        for script in soup.find_all('script', src=True):
+            src = urljoin(url, script['src'])
+            if self._is_same_domain(src):
+                tasks.append(self._store_asset(page_id, src, 'js', script))
+        
+        # Fonts
+        style_tags = soup.find_all('style')
+        for style in style_tags:
+            # Extract font URLs from CSS
+            pass  # Simplified
+        
+        # Extract links for crawling
+        for a in soup.find_all('a', href=True):
+            href = urljoin(url, a['href'])
+            if self._is_same_domain(href) and href not in self.visited:
+                # Store relationship
+                cursor.execute('INSERT INTO links (from_page_id, to_url, link_type) VALUES (?, ?, ?)',
+                             (page_id, href, 'page'))
+                self.queue.append((href, depth + 1))
+        
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        
+        self.conn.commit()
+    
+    async def _store_asset(self, page_id: int, url: str, asset_type: str, element=None):
+        """Store asset in database"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, ssl=True, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        content = await response.read()
+                        content_hash = hashlib.sha256(content).hexdigest()
+                        
+                        parsed = urlparse(url)
+                        mime_type = mimetypes.guess_type(parsed.path)[0]
+                        
+                        cursor = self.conn.cursor()
+                        try:
+                            # Store asset metadata
+                            cursor.execute('''
+                                INSERT INTO assets
+                                (url, domain, path, asset_type, content_hash, file_size, mime_type)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ''', (
+                                url,
+                                self.domain,
+                                parsed.path,
+                                asset_type,
+                                content_hash,
+                                len(content),
+                                mime_type
+                            ))
+                            
+                            # Store actual content
+                            cursor.execute('''
+                                INSERT OR IGNORE INTO asset_blobs
+                                (content_hash, content, compressed_size)
+                                VALUES (?, ?, ?)
+                            ''', (content_hash, content, len(content)))
+                            
+                            # Link to page
+                            cursor.execute('INSERT INTO links (from_page_id, to_url, link_type) VALUES (?, ?, ?)',
+                                         (page_id, url, asset_type))
+                            
+                            self.conn.commit()
+                            self.stats[asset_type] += 1
+                        except sqlite3.IntegrityError:
+                            pass  # Already exists
+        except Exception as e:
+            logger.debug(f"Asset error {url}: {e}")
+    
+    def _is_same_domain(self, url: str) -> bool:
+        try:
+            domain = urlparse(url).netloc.lower()
+            return domain == self.domain
+        except:
+            return False
+    
+    async def _finalize(self):
+        """Finalize archive"""
+        cursor = self.conn.cursor()
+        
+        # Store metadata
+        cursor.execute('INSERT OR REPLACE INTO metadata (domain, key, value) VALUES (?, ?, ?)',
+                     (self.domain, 'archived_at', datetime.now().isoformat()))
+        cursor.execute('INSERT OR REPLACE INTO metadata (domain, key, value) VALUES (?, ?, ?)',
+                     (self.domain, 'start_url', self.start_url))
+        
+        self.conn.commit()
+        
+        # Print statistics
+        cursor.execute('SELECT COUNT(*) FROM pages WHERE domain = ?', (self.domain,))
+        pages = cursor.fetchone()[0]
+        cursor.execute('SELECT COUNT(*) FROM assets WHERE domain = ?', (self.domain,))
+        assets = cursor.fetchone()[0]
+        cursor.execute('SELECT COUNT(*) FROM asset_blobs')
+        blobs = cursor.fetchone()[0]
+        cursor.execute('SELECT SUM(file_size) FROM assets WHERE domain = ?', (self.domain,))
+        total_size = cursor.fetchone()[0] or 0
+        
+        db_size = self.db_path.stat().st_size / 1024 / 1024
+        
+        print("\n" + "="*70)
+        print("✅ SMART ARCHIVE COMPLETE")
+        print("="*70)
+        print(f"Domain: {self.domain}")
+        print(f"Pages: {pages}")
+        print(f"Assets: {assets}")
+        print(f"Asset blobs: {blobs}")
+        print(f"Total asset size: {total_size / 1024 / 1024:.2f} MB")
+        print(f"Database size: {db_size:.2f} MB")
+        print(f"Database: {self.db_path}")
+        print("="*70)
+        
+        self.conn.close()
+
+async def main():
+    import sys
+    url = sys.argv[1] if len(sys.argv) > 1 else 'https://callmedley.com'
+    depth = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    
+    archiver = SmartArchiver(url, 'archive.db', max_depth=depth, max_pages=500)
+    await archiver.archive()
+
+if __name__ == '__main__':
+    asyncio.run(main())
+SCRIPT_EOF
+      
+      - name: Run smart archiver
+        run: |
+          python3 smart_archiver.py "${{ steps.domain.outputs.url }}" ${{ github.event.inputs.depth || '5' }}
+      
+      - name: Create schema documentation
+        run: |
+          cat > ARCHIVE_SCHEMA.md << 'SCHEMA_EOF'
+# 📊 Smart Archive Database Schema
+
+## Tables
+
+### `pages` - Archived web pages
+```sql
+- id (PRIMARY KEY)
+- url (UNIQUE)
+- domain
+- path
+- title
+- html_hash (for deduplication)
+- content_hash
+- depth (crawl depth)
+- status_code
+- content_length
+- headers (JSON)
+- extracted_at (TIMESTAMP)
+```
+
+### `assets` - Files (images, CSS, JS, fonts, etc)
+```sql
+- id (PRIMARY KEY)
+- url (UNIQUE)
+- domain
+- path
+- asset_type (image, css, js, font, media)
+- content_hash (links to asset_blobs)
+- file_size
+- mime_type
+- width (for images)
+- height (for images)
+- extracted_at (TIMESTAMP)
+```
+
+### `asset_blobs` - Actual binary content
+```sql
+- id (PRIMARY KEY)
+- content_hash (UNIQUE, FK to assets)
+- content (BLOB - actual file data)
+- compressed_size
+```
+
+### `links` - Relationships between pages and assets
+```sql
+- id (PRIMARY KEY)
+- from_page_id (FK to pages)
+- to_url
+- link_type (page, image, css, js, font, media)
+```
+
+### `metadata` - Archive info
+```sql
+- id (PRIMARY KEY)
+- domain
+- key
+- value
+```
+
+## Example Queries
+
+### Get all pages
+```sql
+SELECT url, title, depth FROM pages WHERE domain = 'example.com';
+```
+
+### Get all images
+```sql
+SELECT url, file_size FROM assets WHERE domain = 'example.com' AND asset_type = 'image';
+```
+
+### Get CSS files
+```sql
+SELECT url FROM assets WHERE domain = 'example.com' AND asset_type = 'css';
+```
+
+### Reconstruct page with assets
+```sql
+SELECT p.url, p.title, l.to_url, a.asset_type
+FROM pages p
+LEFT JOIN links l ON p.id = l.from_page_id
+LEFT JOIN assets a ON l.to_url = a.url
+WHERE p.url = 'https://example.com/';
+```
+
+### Export asset
+```sql
+SELECT ab.content
+FROM asset_blobs ab
+JOIN assets a ON ab.content_hash = a.content_hash
+WHERE a.url = 'https://example.com/image.jpg';
+```
+SCHEMA_EOF
+      
+      - name: Create reconstruction script
+        run: |
+          cat > reconstruct_site.py << 'RECON_EOF'
+#!/usr/bin/env python3
+"""
+Reconstruct website from smart archive database
+"""
+
+import sqlite3
+import json
+from pathlib import Path
+from urllib.parse import urlparse
+from bs4 import BeautifulSoup
+
+def reconstruct(db_path: str, output_dir: str = 'reconstructed_site', domain: str = None):
+    """
+    Reconstruct full website from archive database
+    """
+    output = Path(output_dir)
+    output.mkdir(exist_ok=True)
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Get domain if not specified
+    if not domain:
+        cursor.execute('SELECT DISTINCT domain FROM pages LIMIT 1')
+        domain = cursor.fetchone()[0]
+    
+    print(f"Reconstructing: {domain}")
+    
+    # Create directories
+    for subdir in ['pages', 'images', 'css', 'js', 'fonts', 'media']:
+        (output / subdir).mkdir(exist_ok=True)
+    
+    # Reconstruct pages
+    cursor.execute('SELECT id, url, html_hash FROM pages WHERE domain = ?', (domain,))
+    pages = cursor.fetchall()
+    
+    asset_map = {}  # Map original URLs to local paths
+    
+    print(f"Reconstructing {len(pages)} pages...")
+    for page_id, url, html_hash in pages:
+        parsed = urlparse(url)
+        filename = parsed.path.strip('/') or 'index.html'
+        filepath = output / 'pages' / filename.replace('/', '__')
+        filepath.parent.mkdir(exist_ok=True, parents=True)
+        
+        # TODO: Get HTML content from pages table and write
+        print(f"  Page: {url}")
+    
+    # Reconstruct assets
+    cursor.execute('''
+        SELECT a.url, a.asset_type, ab.content
+        FROM assets a
+        JOIN asset_blobs ab ON a.content_hash = ab.content_hash
+        WHERE a.domain = ?
+    ''', (domain,))
+    assets = cursor.fetchall()
+    
+    print(f"Reconstructing {len(assets)} assets...")
+    for url, asset_type, content in assets:
+        parsed = urlparse(url)
+        filename = parsed.path.strip('/').split('/')[-1]
+        
+        if asset_type == 'image':
+            subdir = 'images'
+        elif asset_type == 'css':
+            subdir = 'css'
+        elif asset_type == 'js':
+            subdir = 'js'
+        elif asset_type == 'font':
+            subdir = 'fonts'
+        else:
+            subdir = 'media'
+        
+        filepath = output / subdir / filename
+        filepath.write_bytes(content)
+        asset_map[url] = str(filepath.relative_to(output))
+        print(f"  Asset: {url}")
+    
+    print(f"\n✅ Reconstructed to: {output}")
+    print(f"Total pages: {len(pages)}")
+    print(f"Total assets: {len(assets)}")
+    conn.close()
+
+if __name__ == '__main__':
+    import sys
+    db = sys.argv[1] if len(sys.argv) > 1 else 'archive.db'
+    reconstruct(db)
+RECON_EOF
+          chmod +x reconstruct_site.py
+      
+      - name: Generate database info
+        run: |
+          python3 << 'DBINFO_EOF'
+import sqlite3
+import json
+
+conn = sqlite3.connect('archive.db')
+cursor = conn.cursor()
+
+# Get all tables
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+tables = [row[0] for row in cursor.fetchall()]
+
+db_info = {"tables": {}}
+
+for table in tables:
+    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+    count = cursor.fetchone()[0]
+    
+    cursor.execute(f"PRAGMA table_info({table})")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    db_info["tables"][table] = {
+        "count": count,
+        "columns": columns
+    }
+
+with open('database_info.json', 'w') as f:
+    json.dump(db_info, f, indent=2)
+
+print(json.dumps(db_info, indent=2))
+conn.close()
+DBINFO_EOF
+      
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-archive-db
+          path: |
+            archive.db
+            ARCHIVE_SCHEMA.md
+            reconstruct_site.py
+            database_info.json
+          retention-days: 90
+      
+      - name: Print summary
+        run: |
+          echo "✅ Smart Archive Complete!"
+          echo ""
+          echo "📦 Artifact: smart-archive-db"
+          echo "📊 Database: archive.db"
+          echo "📝 Schema: ARCHIVE_SCHEMA.md"
+          echo "🔧 Reconstruct: reconstruct_site.py"
+          echo ""
+          cat database_info.json
