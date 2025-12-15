@@ -56,14 +56,7 @@ jobs:
       - name: Run crawler
         run: python crawler.py
       
-      - name: Verify DB
-        run: |
-          if [ -f "${{ steps.site.outputs.db_file }}" ]; then
-            ls -lh "${{ steps.site.outputs.db_file }}"
-            echo "✅ DB created successfully"
-          fi
-      
-      - name: Store in artifact (no-zip)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: db-${{ steps.site.outputs.domain }}
@@ -71,3 +64,114 @@ jobs:
           retention-days: 90
           if-no-files-found: error
           compression-level: 0
+
+  verify:
+    needs: crawl
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Check DB integrity
+        run: |
+          python3 << 'PYTHON'
+          import sqlite3
+          import os
+          from pathlib import Path
+          
+          print("\n" + "="*60)
+          print("🔍 DATABASE INTEGRITY CHECK")
+          print("="*60)
+          
+          artifacts_dir = Path('artifacts')
+          db_files = list(artifacts_dir.glob('db-*/*.db'))
+          
+          if not db_files:
+            print("❌ No database files found!")
+            exit(1)
+          
+          print(f"\n📦 Found {len(db_files)} database file(s)\n")
+          
+          total_pages = 0
+          total_assets = 0
+          total_size = 0
+          errors = []
+          
+          for db_file in sorted(db_files):
+            domain = db_file.parent.name.replace('db-', '')
+            size_mb = db_file.stat().st_size / 1024 / 1024
+            total_size += size_mb
+            
+            print(f"Domain: {domain}")
+            print(f"  File: {db_file.name}")
+            print(f"  Size: {size_mb:.2f} MB")
+            
+            try:
+              conn = sqlite3.connect(str(db_file))
+              cursor = conn.cursor()
+              
+              # Check tables exist
+              cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+              tables = [row[0] for row in cursor.fetchall()]
+              
+              if 'pages' not in tables:
+                errors.append(f"❌ {domain}: Missing 'pages' table")
+                print(f"    ❌ Missing 'pages' table")
+              else:
+                # Get page count
+                cursor.execute("SELECT COUNT(*) FROM pages")
+                pages = cursor.fetchone()[0]
+                total_pages += pages
+                print(f"    ✅ Pages: {pages}")
+              
+              if 'assets' in tables:
+                cursor.execute("SELECT COUNT(*) FROM assets")
+                assets = cursor.fetchone()[0]
+                total_assets += assets
+                print(f"    ✅ Assets: {assets}")
+              
+              # Check database integrity
+              cursor.execute("PRAGMA integrity_check")
+              integrity = cursor.fetchone()[0]
+              
+              if integrity != 'ok':
+                errors.append(f"❌ {domain}: Database corruption detected")
+                print(f"    ❌ Database corrupted: {integrity}")
+              else:
+                print(f"    ✅ Integrity: OK")
+              
+              conn.close()
+              print()
+              
+            except Exception as e:
+              errors.append(f"❌ {domain}: {str(e)}")
+              print(f"    ❌ Error: {str(e)}\n")
+          
+          # Summary
+          print("="*60)
+          print("📊 SUMMARY")
+          print("="*60)
+          print(f"Total databases: {len(db_files)}")
+          print(f"Total pages: {total_pages}")
+          print(f"Total assets: {total_assets}")
+          print(f"Total size: {total_size:.2f} MB")
+          print()
+          
+          if errors:
+            print("❌ ERRORS:")
+            for error in errors:
+              print(f"  {error}")
+            print()
+            exit(1)
+          else:
+            print("✅ All databases OK!")
+            print("="*60 + "\n")
+          PYTHON
