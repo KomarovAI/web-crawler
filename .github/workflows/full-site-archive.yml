@@ -1,0 +1,540 @@
+name: Full Site Archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to archive'
+        required: true
+        default: 'https://callmedley.com'
+      depth:
+        description: 'Crawl depth'
+        required: false
+        default: '5'
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -U aiohttp beautifulsoup4 lxml aiofiles
+          pip install pillow  # For image optimization
+      
+      - name: Extract domain from URL
+        id: domain
+        run: |
+          URL="${{ github.event.inputs.url || 'https://callmedley.com' }}"
+          DOMAIN=$(echo "$URL" | sed -E 's|https?://([^/]+).*|\1|')
+          DOMAIN_SAFE=$(echo "$DOMAIN" | tr '.' '_')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "domain_safe=$DOMAIN_SAFE" >> $GITHUB_OUTPUT
+      
+      - name: Create archiver script
+        run: |
+          cat > full_site_archiver.py << 'SCRIPT_EOF'
+import asyncio
+import aiohttp
+import aiofiles
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
+import logging
+import json
+from datetime import datetime
+from collections import defaultdict
+import mimetypes
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class FullSiteArchiver:
+    def __init__(self, start_url: str, output_dir: str = 'archive', max_depth: int = 5, max_pages: int = 500):
+        self.start_url = start_url
+        self.domain = urlparse(start_url).netloc.lower()
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True, parents=True)
+        self.max_depth = max_depth
+        self.max_pages = max_pages
+        
+        # Create directory structure
+        for subdir in ['html', 'css', 'js', 'images', 'fonts', 'media', 'assets', 'downloads']:
+            (self.output_dir / subdir).mkdir(exist_ok=True, parents=True)
+        
+        self.visited = {}
+        self.queue = [(start_url, 0)]  # (url, depth)
+        self.stats = defaultdict(int)
+        self.file_map = {}  # Maps original URLs to local paths
+        self.errors = []
+    
+    async def archive(self):
+        """Main archiving process"""
+        logger.info(f"Starting full site archive: {self.start_url}")
+        logger.info(f"Max depth: {self.max_depth}, Max pages: {self.max_pages}")
+        
+        timeout = aiohttp.ClientTimeout(total=60)
+        connector = aiohttp.TCPConnector(
+            limit_per_host=5,
+            limit=20,
+            ttl_dns_cache=300
+        )
+        
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            headers={'User-Agent': 'Mozilla/5.0 (compatible; ArchiveBot/1.0)'}
+        ) as session:
+            while self.queue and len(self.visited) < self.max_pages:
+                url, depth = self.queue.pop(0)
+                
+                if url in self.visited or depth > self.max_depth:
+                    continue
+                
+                self.visited[url] = depth
+                await self._fetch_page(session, url, depth)
+        
+        await self._post_process()
+        await self._generate_report()
+    
+    async def _fetch_page(self, session, url: str, depth: int):
+        """Fetch page and extract all resources"""
+        try:
+            async with session.get(url, ssl=True, allow_redirects=True) as response:
+                if response.status != 200:
+                    self.errors.append(f"{url}: Status {response.status}")
+                    return
+                
+                content_type = response.headers.get('content-type', '').lower()
+                
+                # Handle HTML pages
+                if 'text/html' in content_type or url.endswith('.html'):
+                    html = await response.text(errors='ignore')
+                    await self._save_html_page(html, url, depth, session)
+                    self.stats['pages'] += 1
+                    logger.info(f"✅ Page [{depth}]: {url[:80]}")
+                
+                # Handle other files
+                else:
+                    content = await response.read()
+                    await self._save_binary_file(content, url)
+        
+        except asyncio.TimeoutError:
+            self.errors.append(f"{url}: Timeout")
+        except Exception as e:
+            self.errors.append(f"{url}: {type(e).__name__}")
+    
+    async def _save_html_page(self, html: str, url: str, depth: int, session):
+        """Save HTML and extract resources"""
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Extract and download all resources
+        tasks = []
+        
+        # Images
+        for img in soup.find_all('img', src=True):
+            src = urljoin(url, img['src'])
+            if self._is_same_domain(src):
+                tasks.append(self._download_resource(session, src, 'images', 'img'))
+                img['src'] = self._get_relative_path(src, 'images')
+        
+        # CSS
+        for link in soup.find_all('link', href=True):
+            if 'stylesheet' in link.get('rel', []):
+                href = urljoin(url, link['href'])
+                if self._is_same_domain(href):
+                    tasks.append(self._download_resource(session, href, 'css', 'css'))
+                    link['href'] = self._get_relative_path(href, 'css')
+        
+        # JavaScript
+        for script in soup.find_all('script', src=True):
+            src = urljoin(url, script['src'])
+            if self._is_same_domain(src):
+                tasks.append(self._download_resource(session, src, 'js', 'js'))
+                script['src'] = self._get_relative_path(src, 'js')
+        
+        # Fonts
+        for link in soup.find_all('link', href=True):
+            href = urljoin(url, link['href'])
+            if 'font' in href.lower() and self._is_same_domain(href):
+                tasks.append(self._download_resource(session, href, 'fonts', 'font'))
+                link['href'] = self._get_relative_path(href, 'fonts')
+        
+        # Media (video, audio)
+        for video in soup.find_all('video'):
+            for source in video.find_all('source', src=True):
+                src = urljoin(url, source['src'])
+                if self._is_same_domain(src):
+                    tasks.append(self._download_resource(session, src, 'media', 'media'))
+                    source['src'] = self._get_relative_path(src, 'media')
+        
+        # Execute all downloads
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Extract links for crawling
+        for a in soup.find_all('a', href=True):
+            href = urljoin(url, a['href'])
+            if self._is_same_domain(href) and href not in self.visited and len(self.visited) < self.max_pages:
+                # Don't queue binary files
+                if not any(href.lower().endswith(ext) for ext in 
+                          ['.pdf', '.zip', '.exe', '.dmg', '.msi', '.gz', '.tar']):
+                    self.queue.append((href, depth + 1))
+        
+        # Save modified HTML
+        filename = self._get_filename(url)
+        filepath = self.output_dir / 'html' / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        
+        async with aiofiles.open(filepath, 'w', encoding='utf-8') as f:
+            await f.write(str(soup.prettify()))
+        
+        self.file_map[url] = str(filepath.relative_to(self.output_dir))
+    
+    async def _download_resource(self, session, url: str, folder: str, resource_type: str):
+        """Download single resource"""
+        if url in self.file_map:
+            return
+        
+        try:
+            async with session.get(url, ssl=True, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status == 200:
+                    content = await response.read()
+                    await self._save_binary_file(content, url, folder)
+                    self.stats[resource_type] += 1
+        except Exception as e:
+            logger.debug(f"Failed to download {url}: {e}")
+    
+    async def _save_binary_file(self, content: bytes, url: str, folder: str = None):
+        """Save binary file"""
+        if url in self.file_map:
+            return
+        
+        # Determine folder
+        if folder is None:
+            ext = urlparse(url).path.split('.')[-1].lower()
+            if ext in ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp']:
+                folder = 'images'
+            elif ext in ['css']:
+                folder = 'css'
+            elif ext in ['js']:
+                folder = 'js'
+            elif ext in ['woff', 'woff2', 'ttf', 'eot', 'otf']:
+                folder = 'fonts'
+            elif ext in ['mp4', 'webm', 'mp3', 'wav']:
+                folder = 'media'
+            else:
+                folder = 'downloads'
+        
+        filename = self._get_filename(url)
+        filepath = self.output_dir / folder / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            async with aiofiles.open(filepath, 'wb') as f:
+                await f.write(content)
+            self.file_map[url] = str(filepath.relative_to(self.output_dir))
+        except Exception as e:
+            logger.debug(f"Failed to save {url}: {e}")
+    
+    async def _post_process(self):
+        """Post-process archived files"""
+        # Generate sitemap
+        sitemap = []
+        for url, depth in sorted(self.visited.items(), key=lambda x: (x[1], x[0])):
+            if url in self.file_map:
+                sitemap.append({
+                    'url': url,
+                    'local': self.file_map[url],
+                    'depth': depth
+                })
+        
+        (self.output_dir / 'sitemap.json').write_text(json.dumps(sitemap, indent=2))
+    
+    async def _generate_report(self):
+        """Generate detailed report"""
+        report = {
+            'domain': self.domain,
+            'start_url': self.start_url,
+            'archived_at': datetime.now().isoformat(),
+            'statistics': dict(self.stats),
+            'total_pages': len([u for u in self.visited.keys() if u in self.file_map]),
+            'total_files': len(self.file_map),
+            'errors': self.errors[:100],  # Limit errors
+            'depth_used': max([d for _, d in self.visited.items()], default=0) if self.visited else 0
+        }
+        
+        report_path = self.output_dir / 'report.json'
+        report_path.write_text(json.dumps(report, indent=2))
+        
+        print("\n" + "="*70)
+        print("✅ FULL SITE ARCHIVE COMPLETE")
+        print("="*70)
+        print(f"Domain: {self.domain}")
+        print(f"Pages: {self.stats['pages']}")
+        print(f"Images: {self.stats['img']}")
+        print(f"CSS: {self.stats['css']}")
+        print(f"JavaScript: {self.stats['js']}")
+        print(f"Fonts: {self.stats['font']}")
+        print(f"Media: {self.stats['media']}")
+        print(f"Downloads: {self.stats.get('download', 0)}")
+        print(f"Total files: {len(self.file_map)}")
+        print(f"Errors: {len(self.errors)}")
+        print(f"Output: {self.output_dir}")
+        print("="*70)
+    
+    def _is_same_domain(self, url: str) -> bool:
+        try:
+            domain = urlparse(url).netloc.lower()
+            return domain == self.domain
+        except:
+            return False
+    
+    def _get_filename(self, url: str) -> str:
+        """Generate filename from URL"""
+        path = urlparse(url).path.strip('/')
+        if not path or path.endswith('/'):
+            return 'index.html'
+        # Sanitize path
+        path = path.replace('/', '__').replace('\\', '__')
+        return path[:200] if len(path) > 200 else path
+    
+    def _get_relative_path(self, url: str, folder: str) -> str:
+        """Get relative path for HTML references"""
+        filename = self._get_filename(url)
+        return f"../{folder}/{filename}"
+
+async def main():
+    import sys
+    url = sys.argv[1] if len(sys.argv) > 1 else 'https://callmedley.com'
+    depth = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    max_pages = int(sys.argv[3]) if len(sys.argv) > 3 else 500
+    
+    archiver = FullSiteArchiver(url, 'archive', max_depth=depth, max_pages=max_pages)
+    await archiver.archive()
+
+if __name__ == '__main__':
+    asyncio.run(main())
+SCRIPT_EOF
+      
+      - name: Run full site archiver
+        run: |
+          python3 full_site_archiver.py "${{ steps.domain.outputs.url }}" ${{ github.event.inputs.depth || '5' }} 500
+      
+      - name: Create index page
+        run: |
+          cat > archive/index.html << 'INDEX_EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Site Archive</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+        h1 { color: white; margin-bottom: 30px; text-align: center; }
+        h2 { color: #333; margin-top: 20px; margin-bottom: 15px; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-value { font-size: 28px; font-weight: bold; color: #667eea; }
+        .stat-label { font-size: 12px; color: #999; margin-top: 5px; }
+        .pages-list { max-height: 400px; overflow-y: auto; }
+        .page-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            color: #667eea;
+            text-decoration: none;
+            display: block;
+        }
+        .page-item:hover { background: #f9f9f9; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📦 Website Archive</h1>
+        <div class="card">
+            <h2>Archive Contents</h2>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-value" id="pages">0</div>
+                    <div class="stat-label">Pages</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="images">0</div>
+                    <div class="stat-label">Images</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="css">0</div>
+                    <div class="stat-label">Stylesheets</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="js">0</div>
+                    <div class="stat-label">Scripts</div>
+                </div>
+            </div>
+            <p id="timestamp" style="color: #999; font-size: 14px;"></p>
+        </div>
+        <div class="card">
+            <h2>Pages in Archive</h2>
+            <div class="pages-list" id="pages-list"></div>
+        </div>
+    </div>
+    <script>
+        fetch('report.json')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('pages').textContent = data.statistics.pages || 0;
+                document.getElementById('images').textContent = data.statistics.img || 0;
+                document.getElementById('css').textContent = data.statistics.css || 0;
+                document.getElementById('js').textContent = data.statistics.js || 0;
+                document.getElementById('timestamp').textContent = 
+                    'Archived: ' + new Date(data.archived_at).toLocaleString();
+            });
+        
+        fetch('sitemap.json')
+            .then(r => r.json())
+            .then(data => {
+                const list = document.getElementById('pages-list');
+                data.forEach(item => {
+                    const a = document.createElement('a');
+                    a.className = 'page-item';
+                    a.href = item.local;
+                    a.textContent = '→ ' + item.url;
+                    list.appendChild(a);
+                });
+            });
+    </script>
+</body>
+</html>
+INDEX_EOF
+      
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-site-archive
+          path: archive/
+          retention-days: 90
+          compression-level: 6
+      
+      - name: Calculate archive size
+        run: |
+          SIZE=$(du -sh archive | cut -f1)
+          FILES=$(find archive -type f | wc -l)
+          echo "Archive size: $SIZE"
+          echo "Total files: $FILES"
+          echo "ARCHIVE_SIZE=$SIZE" >> $GITHUB_ENV
+          echo "ARCHIVE_FILES=$FILES" >> $GITHUB_ENV
+      
+      - name: Create deployment summary
+        run: |
+          cat > DEPLOYMENT_SUMMARY.md << 'SUMMARY_EOF'
+          # ✅ Full Site Archive Complete
+          
+          **Domain:** ${{ steps.domain.outputs.domain }}
+          **URL:** ${{ steps.domain.outputs.url }}
+          **Archived:** $(date)
+          
+          ## Archive Statistics
+          - Archive size: ${{ env.ARCHIVE_SIZE }}
+          - Total files: ${{ env.ARCHIVE_FILES }}
+          - Depth used: [Check report.json]
+          
+          ## Contents
+          - `html/` - Archived HTML pages
+          - `css/` - Stylesheets
+          - `js/` - JavaScript files
+          - `images/` - Images
+          - `fonts/` - Web fonts
+          - `media/` - Video/Audio
+          - `downloads/` - Other files
+          - `index.html` - Archive viewer
+          - `report.json` - Detailed statistics
+          - `sitemap.json` - Page map
+          
+          ## Usage
+          1. Download artifact: `full-site-archive`
+          2. Extract and open `index.html`
+          3. Or deploy to GitHub Pages
+          SUMMARY_EOF
+      
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-summary
+          path: DEPLOYMENT_SUMMARY.md
+          retention-days: 30
+      
+      - name: Print completion
+        run: |
+          echo "✅ Full site archive completed successfully!"
+          echo "📦 Artifact: full-site-archive"
+          echo "📊 Size: ${{ env.ARCHIVE_SIZE }}"
+          echo "📄 Files: ${{ env.ARCHIVE_FILES }}"
+          echo ""
+          echo "Next steps:"
+          echo "1. Download artifact from Actions tab"
+          echo "2. Extract the archive"
+          echo "3. Open index.html in browser"
+          echo "4. Or commit to GitHub Pages for hosting"
+
+  # Optional: Deploy to GitHub Pages
+  deploy:
+    if: github.event_name == 'schedule'
+    needs: archive
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/download-artifact@v4
+        with:
+          name: full-site-archive
+          path: site-archives/callmedley_archive
+      
+      - name: Commit and push
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "Archive Bot"
+          git add site-archives/
+          git commit -m "Update full site archives" || true
+          git push
