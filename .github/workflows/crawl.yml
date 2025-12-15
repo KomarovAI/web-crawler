@@ -32,10 +32,14 @@ jobs:
       
       - name: Setup site
         id: site
+        env:
+          SITE_JSON: ${{ toJson(matrix.site) }}
         run: |
           python3 << 'PYTHON'
           import json
-          site = json.loads('${{ toJson(matrix.site) }}')
+          import os
+          
+          site = json.loads(os.environ['SITE_JSON'])
           url = site['url']
           max_pages = site.get('max_pages', 50)
           domain = url.replace('https://', '').replace('http://', '').split('/')[0].replace('.', '_')
