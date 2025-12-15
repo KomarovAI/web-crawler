@@ -123,8 +123,8 @@ jobs:
               tables = [row[0] for row in cursor.fetchall()]
               
               if 'pages' not in tables:
-                errors.append(f"❌ {domain}: Missing 'pages' table")
-                print(f"    ❌ Missing 'pages' table")
+                errors.append(f"❌ {domain}: Missing pages table")
+                print(f"    ❌ Missing pages table")
               else:
                 # Get page count
                 cursor.execute("SELECT COUNT(*) FROM pages")
