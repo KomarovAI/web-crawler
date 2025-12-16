@@ -84,108 +84,108 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: 🔍 COMPREHENSIVE VERIFICATION (8 CATEGORIES)
+      - name: 🔍 COMPREHENSIVE VERIFICATION
         run: |
           python3 << 'VERIFY_EOF'
-import sqlite3
-import json
-from pathlib import Path
-import sys
-
-print("\n" + "="*120)
-print("🔍 COMPREHENSIVE DATABASE VERIFICATION (8 CATEGORIES)")
-print("="*120)
-
-artifacts_dir = Path('artifacts')
-db_files = list(artifacts_dir.glob('db-*/*.db'))
-
-if not db_files:
-    print("\n❌ No database files found!")
-    sys.exit(1)
-
-print(f"\n📦 Processing {len(db_files)} database(s)\n")
-
-for db_file in sorted(db_files):
-    domain = db_file.parent.name.replace('db-', '')
-    file_size_mb = db_file.stat().st_size / 1024 / 1024
-    
-    print(f"\n{'='*120}")
-    print(f"🗂️  {domain.upper()} | {file_size_mb:.2f} MB")
-    print(f"{'='*120}")
-    
-    conn = sqlite3.connect(str(db_file))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    print("\n1️⃣  DATABASE INTEGRITY + FOREIGN KEYS")
-    cursor.execute("PRAGMA integrity_check")
-    integrity = cursor.fetchone()[0]
-    test1 = integrity == 'ok'
-    print(f"   {'✅' if test1 else '❌'} integrity_check: {integrity}")
-    
-    cursor.execute("PRAGMA quick_check")
-    quick = cursor.fetchone()[0]
-    print(f"   ✅ quick_check: {quick}")
-    
-    cursor.execute("PRAGMA foreign_key_check")
-    fk_errors = cursor.fetchall()
-    test_fk = len(fk_errors) == 0
-    print(f"   {'✅' if test_fk else '❌'} Foreign keys: {len(fk_errors)} violations")
-    
-    print("\n2️⃣  PAGES VALIDATION")
-    cursor.execute("SELECT COUNT(*) FROM pages")
-    pages_total = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(DISTINCT url) FROM pages")
-    unique_urls = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM pages WHERE status_code = 200")
-    pages_200 = cursor.fetchone()[0]
-    print(f"   ✅ Total pages: {pages_total}")
-    print(f"   ✅ Unique URLs: {unique_urls}")
-    print(f"   ✅ Status 200 OK: {pages_200}/{pages_total}")
-    
-    print("\n3️⃣  ASSETS INTEGRITY")
-    cursor.execute("SELECT COUNT(*) FROM assets")
-    assets_total = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM assets WHERE content_hash IS NULL")
-    assets_no_hash = cursor.fetchone()[0]
-    test3a = assets_no_hash == 0
-    print(f"   {'✅' if test3a else '❌'} Assets with content_hash: {assets_total - assets_no_hash}/{assets_total}")
-    
-    print("\n4️⃣  ASSET BLOBs VERIFICATION")
-    cursor.execute("SELECT COUNT(*) FROM asset_blobs")
-    blobs_total = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM asset_blobs WHERE content IS NULL")
-    blobs_no_content = cursor.fetchone()[0]
-    test4a = blobs_no_content == 0
-    print(f"   {'✅' if test4a else '❌'} BLOBs with content: {blobs_total - blobs_no_content}/{blobs_total}")
-    
-    print("\n5️⃣  DEDUPLICATION STATS")
-    cursor.execute("SELECT COUNT(DISTINCT content_hash) FROM assets")
-    unique_blobs = cursor.fetchone()[0]
-    dedup_pct = ((assets_total - unique_blobs) / assets_total * 100) if assets_total > 0 else 0
-    print(f"   ✅ Total assets: {assets_total}")
-    print(f"   ✅ Unique: {unique_blobs} ({dedup_pct:.1f}% deduplicated)")
-    
-    print("\n6️⃣  MIME-TYPES")
-    cursor.execute("SELECT asset_type, COUNT(*) FROM assets GROUP BY asset_type ORDER BY COUNT(*) DESC LIMIT 5")
-    for atype, cnt in cursor.fetchall():
-        print(f"   • {atype}: {cnt}")
-    
-    print("\n7️⃣  PERFORMANCE METRICS")
-    cursor.execute("PRAGMA page_count")
-    page_count = cursor.fetchone()[0]
-    cursor.execute("PRAGMA page_size")
-    page_size = cursor.fetchone()[0]
-    print(f"   ✅ Pages: {page_count}, Size: {page_size} bytes")
-    
-    print("\n8️⃣  FINAL VERDICT")
-    if integrity == 'ok' and test1 and test_fk and test3a and test4a:
-        print(f"   🌟 ALL TESTS PASSED - PRODUCTION READY ✅")
-    else:
-        print(f"   ⚠️  SOME TESTS FAILED")
-        sys.exit(1)
-    
-    conn.close()
-
-print("\n✅ VERIFICATION COMPLETE!\n")
-VERIFY_EOF
+          import sqlite3
+          import json
+          from pathlib import Path
+          import sys
+          
+          print("\n" + "="*120)
+          print("🔍 COMPREHENSIVE DATABASE VERIFICATION (8 CATEGORIES)")
+          print("="*120)
+          
+          artifacts_dir = Path('artifacts')
+          db_files = list(artifacts_dir.glob('db-*/*.db'))
+          
+          if not db_files:
+              print("\n❌ No database files found!")
+              sys.exit(1)
+          
+          print(f"\n📦 Processing {len(db_files)} database(s)\n")
+          
+          for db_file in sorted(db_files):
+              domain = db_file.parent.name.replace('db-', '')
+              file_size_mb = db_file.stat().st_size / 1024 / 1024
+              
+              print(f"\n{'='*120}")
+              print(f"🗂️  {domain.upper()} | {file_size_mb:.2f} MB")
+              print(f"{'='*120}")
+              
+              conn = sqlite3.connect(str(db_file))
+              conn.row_factory = sqlite3.Row
+              cursor = conn.cursor()
+              
+              print("\n1️⃣  DATABASE INTEGRITY + FOREIGN KEYS")
+              cursor.execute("PRAGMA integrity_check")
+              integrity = cursor.fetchone()[0]
+              test1 = integrity == 'ok'
+              print(f"   {'✅' if test1 else '❌'} integrity_check: {integrity}")
+              
+              cursor.execute("PRAGMA quick_check")
+              quick = cursor.fetchone()[0]
+              print(f"   ✅ quick_check: {quick}")
+              
+              cursor.execute("PRAGMA foreign_key_check")
+              fk_errors = cursor.fetchall()
+              test_fk = len(fk_errors) == 0
+              print(f"   {'✅' if test_fk else '❌'} Foreign keys: {len(fk_errors)} violations")
+              
+              print("\n2️⃣  PAGES VALIDATION")
+              cursor.execute("SELECT COUNT(*) FROM pages")
+              pages_total = cursor.fetchone()[0]
+              cursor.execute("SELECT COUNT(DISTINCT url) FROM pages")
+              unique_urls = cursor.fetchone()[0]
+              cursor.execute("SELECT COUNT(*) FROM pages WHERE status_code = 200")
+              pages_200 = cursor.fetchone()[0]
+              print(f"   ✅ Total pages: {pages_total}")
+              print(f"   ✅ Unique URLs: {unique_urls}")
+              print(f"   ✅ Status 200 OK: {pages_200}/{pages_total}")
+              
+              print("\n3️⃣  ASSETS INTEGRITY")
+              cursor.execute("SELECT COUNT(*) FROM assets")
+              assets_total = cursor.fetchone()[0]
+              cursor.execute("SELECT COUNT(*) FROM assets WHERE content_hash IS NULL")
+              assets_no_hash = cursor.fetchone()[0]
+              test3a = assets_no_hash == 0
+              print(f"   {'✅' if test3a else '❌'} Assets with content_hash: {assets_total - assets_no_hash}/{assets_total}")
+              
+              print("\n4️⃣  ASSET BLOBs VERIFICATION")
+              cursor.execute("SELECT COUNT(*) FROM asset_blobs")
+              blobs_total = cursor.fetchone()[0]
+              cursor.execute("SELECT COUNT(*) FROM asset_blobs WHERE content IS NULL")
+              blobs_no_content = cursor.fetchone()[0]
+              test4a = blobs_no_content == 0
+              print(f"   {'✅' if test4a else '❌'} BLOBs with content: {blobs_total - blobs_no_content}/{blobs_total}")
+              
+              print("\n5️⃣  DEDUPLICATION STATS")
+              cursor.execute("SELECT COUNT(DISTINCT content_hash) FROM assets")
+              unique_blobs = cursor.fetchone()[0]
+              dedup_pct = ((assets_total - unique_blobs) / assets_total * 100) if assets_total > 0 else 0
+              print(f"   ✅ Total assets: {assets_total}")
+              print(f"   ✅ Unique: {unique_blobs} ({dedup_pct:.1f}% deduplicated)")
+              
+              print("\n6️⃣  MIME-TYPES")
+              cursor.execute("SELECT asset_type, COUNT(*) FROM assets GROUP BY asset_type ORDER BY COUNT(*) DESC LIMIT 5")
+              for atype, cnt in cursor.fetchall():
+                  print(f"   • {atype}: {cnt}")
+              
+              print("\n7️⃣  PERFORMANCE METRICS")
+              cursor.execute("PRAGMA page_count")
+              page_count = cursor.fetchone()[0]
+              cursor.execute("PRAGMA page_size")
+              page_size = cursor.fetchone()[0]
+              print(f"   ✅ Pages: {page_count}, Size: {page_size} bytes")
+              
+              print("\n8️⃣  FINAL VERDICT")
+              if integrity == 'ok' and test1 and test_fk and test3a and test4a:
+                  print(f"   🌟 ALL TESTS PASSED - PRODUCTION READY ✅")
+              else:
+                  print(f"   ⚠️  SOME TESTS FAILED")
+                  sys.exit(1)
+              
+              conn.close()
+          
+          print("\n✅ VERIFICATION COMPLETE!\n")
+          VERIFY_EOF
