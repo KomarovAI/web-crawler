@@ -16,7 +16,6 @@
 ✅ **Generates WACZ** (browser-playable packages)  
 ✅ **Stores in SQLite** (queryable database)  
 ✅ **Zero manual intervention** - scheduled + on-demand  
-**✅ NEW:** **⚡ Ultra-fast website downloader (HTTrack, WGET, Monolith)**  
 
 ❌ **NOT:** Web server, hosting platform, or reverse proxy  
 ❌ **NOT:** For serving websites to users  
@@ -24,55 +23,7 @@
 
 ---
 
-## 🚀 NEW: ULTIMATE WEBSITE DOWNLOADER
-
-### 🔥 Download ANY website in 30 seconds!
-
-#### Quick Examples:
-
-```bash
-# HTTrack (recommended - maximum control)
-httrack https://callmedley.com -O ./site -k -%e -c16 --max-rate=0
-
-# WGET (built-in - ultra-fast)
-wget -m -p -k --domains callmedley.com --no-parent https://callmedley.com/
-
-# Monolith (single file - easy sharing)
-monolith https://callmedley.com/ -o site.html
-
-# Docker (no installation needed)
-docker run -v $(pwd)/downloads:/app/downloads downloader \
-  download https://callmedley.com httrack
-
-# Python module
-python3 downloader/site_downloader.py https://callmedley.com -m all
-
-# CLI Script
-./downloader/cli.sh download https://callmedley.com all
-```
-
-### 📚 Three Powerful Engines
-
-| Engine | Speed | Control | Install | Best For |
-|--------|-------|---------|---------|----------|
-| **HTTrack** ⭐ | ⚡⚡⚡⚡ | ⚡⚡⚡⚡⚡ | `brew install` | Maximum control + offline |
-| **WGET** ⚡ | ⚡⚡⚡⚡⚡ | ⚡⚡⚡ | Built-in | Raw speed |
-| **Monolith** 📦 | ⚡⚡⚡ | ⚡ | `brew install` | Single HTML file |
-
-### 🎁 Includes Everything
-
-✅ CLI script (bash)  
-✅ Python module  
-✅ Docker container  
-✅ GitHub Actions workflow  
-✅ Full documentation  
-
-👉 **[START HERE: downloader/QUICKSTART.md](downloader/QUICKSTART.md)**  
-📖 **[FULL DOCS: downloader/README.md](downloader/README.md)**  
-
----
-
-## 🚀 How It Works (Crawler)
+## 🚀 How It Works
 
 ### Via GitHub Actions (Automated)
 
@@ -101,10 +52,9 @@ This repo is **AI-agent-friendly**:
 ✅ Clear API (simple Python interface)
 ✅ Well-documented (easy to understand)
 ✅ Production-ready (battle-tested)
-✅ Downloader module (ultra-fast site extraction)
 ```
 
-**Use Case:** Train AI to crawl, archive, download, and analyze websites autonomously.
+**Use Case:** Train AI to crawl, archive, and analyze websites autonomously.
 
 ---
 
@@ -117,7 +67,6 @@ This repo is **AI-agent-friendly**:
 ✅ Auto-generated releases
 ✅ Artifact storage (90 days)
 ✅ Free tier: 3000 min/month (we use ~150 min)
-✅ Website downloads via workflow
 ```
 
 ### Example: Daily Archive
@@ -141,7 +90,6 @@ This repo is **AI-agent-friendly**:
 | export_to_warc.py | Format conversion | Standard output |
 | export_to_wacz.py | Playable package | Shareable archive |
 | database_utils.py | DB helpers | Query interface |
-| **downloader/** | **New: Fast downloader** | **3 engines, CLI + Python** |
 
 ---
 
@@ -203,18 +151,6 @@ async def crawl_for_ai(url: str):
 db = asyncio.run(crawl_for_ai('https://example.com'))
 ```
 
-### Download Sites Programmatically
-
-```python
-from downloader.site_downloader import SiteDownloader
-
-# Fast download with Python
-downloader = SiteDownloader()
-result = downloader.download('https://example.com', method='httrack')
-# Or use all three methods
-results = downloader.download_all('https://example.com')
-```
-
 ---
 
 ## 💾 Outputs
@@ -223,8 +159,6 @@ results = downloader.download_all('https://example.com')
 archive.db        SQLite (queryable by AI)
 archive.warc.gz   ISO 28500:2017 standard
 archive.wacz      Browser-playable
-downloads/        Full website copies (HTTrack/WGET)
-site.html         Single-file archive (Monolith)
 ```
 
 **For AI:** Query SQLite directly
@@ -250,7 +184,6 @@ SELECT url, asset_type FROM assets WHERE asset_type = 'image';
 
 ```
 Crawl time:      3-4 minutes (50 pages + assets)
-Download time:   1-5 minutes (full site with HTTrack)
 Archive size:    ~125 MB
 Asset dedup:     20% storage savings
 Memory:          10-20 MB
@@ -286,8 +219,6 @@ class AIArchiver(WARCCompliantArchiver):
 
 ## 📖 Docs
 
-- [🚀 DOWNLOADER QUICKSTART](downloader/QUICKSTART.md) - **30 seconds to download any site**
-- [📚 DOWNLOADER FULL DOCS](downloader/README.md) - Complete documentation
 - [BEST_PRACTICES.md](BEST_PRACTICES.md) - Architecture
 - [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md) - Tracking
 - [.env.example](.env.example) - Config
@@ -303,8 +234,6 @@ beautifulsoup4 (HTML parsing)
 SQLite3 (database)
 Docker (containerization)
 GitHub Actions (CI/CD)
-
-✅ NEW: HTTrack, WGET, Monolith (downloaders)
 ```
 
 ---
@@ -329,23 +258,20 @@ Cost:       FREE
 ❌ Content delivery (for archival, not distribution)
 ```
 
-**It's a crawler that runs in GitHub infrastructure + fast local downloader.**
+**It's a crawler that runs in GitHub infrastructure.**
 
 ---
 
 ## 🚀 Next Steps
 
-1. **Quick download?** → [downloader/QUICKSTART.md](downloader/QUICKSTART.md)
-2. Fork the repo
-3. Enable GitHub Actions
-4. Configure target URL
-5. Run automated crawls
-6. Download sites locally
-7. Integrate with your AI agent
-8. Analyze archives
+1. Fork the repo
+2. Enable GitHub Actions
+3. Configure target URL
+4. Run automated crawls
+5. Integrate with your AI agent
+6. Analyze archives
 
 ---
 
-**Status:** ✅ Production Ready | **For:** AI Agents | **Via:** GitHub Actions + Local Downloader  
-**Repo Size:** 60 KB total | **Code:** 52 KB slim | **Docs:** Token-optimized  
-**NEW:** ⚡ **Downloader module with 3 powerful engines (HTTrack, WGET, Monolith)**
+**Status:** ✅ Production Ready | **For:** AI Agents | **Via:** GitHub Actions  
+**Repo Size:** 60 KB total | **Code:** 52 KB slim | **Docs:** Token-optimized
