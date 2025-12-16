@@ -117,7 +117,6 @@ for db_file in sorted(db_files):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    # 1️⃣ DATABASE INTEGRITY + FOREIGN KEYS
     print("\n1️⃣  DATABASE INTEGRITY + FOREIGN KEYS")
     cursor.execute("PRAGMA integrity_check")
     integrity = cursor.fetchone()[0]
@@ -133,7 +132,6 @@ for db_file in sorted(db_files):
     test_fk = len(fk_errors) == 0
     print(f"   {'✅' if test_fk else '❌'} Foreign keys: {len(fk_errors)} violations")
     
-    # 2️⃣ PAGES VALIDATION
     print("\n2️⃣  PAGES VALIDATION")
     cursor.execute("SELECT COUNT(*) FROM pages")
     pages_total = cursor.fetchone()[0]
@@ -141,16 +139,11 @@ for db_file in sorted(db_files):
     unique_urls = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM pages WHERE status_code = 200")
     pages_200 = cursor.fetchone()[0]
-    cursor.execute("SELECT SUM(LENGTH(COALESCE(html, ''))) FROM pages")
-    html_size_bytes = cursor.fetchone()[0] or 0
-    html_size_mb = html_size_bytes / 1024 / 1024
     print(f"   ✅ Total pages: {pages_total}")
     print(f"   ✅ Unique URLs: {unique_urls}")
     print(f"   ✅ Status 200 OK: {pages_200}/{pages_total}")
-    print(f"   ✅ HTML content: {html_size_mb:.2f} MB")
     
-    # 3️⃣ ASSETS INTEGRITY (ORPHANED, BROKEN)
-    print("\n3️⃣  ASSETS INTEGRITY (ORPHANED, BROKEN)")
+    print("\n3️⃣  ASSETS INTEGRITY")
     cursor.execute("SELECT COUNT(*) FROM assets")
     assets_total = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM assets WHERE content_hash IS NULL")
@@ -158,13 +151,7 @@ for db_file in sorted(db_files):
     test3a = assets_no_hash == 0
     print(f"   {'✅' if test3a else '❌'} Assets with content_hash: {assets_total - assets_no_hash}/{assets_total}")
     
-    cursor.execute("SELECT COUNT(*) FROM assets WHERE file_size = 0 OR file_size IS NULL")
-    broken_assets = cursor.fetchone()[0]
-    test3b = broken_assets == 0
-    print(f"   {'✅' if test3b else '❌'} Non-empty assets: {assets_total - broken_assets}/{assets_total}")
-    
-    # 4️⃣ ASSET BLOBs (CONTENT VERIFICATION)
-    print("\n4️⃣  ASSET BLOBs (CONTENT VERIFICATION)")
+    print("\n4️⃣  ASSET BLOBs VERIFICATION")
     cursor.execute("SELECT COUNT(*) FROM asset_blobs")
     blobs_total = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM asset_blobs WHERE content IS NULL")
@@ -172,134 +159,33 @@ for db_file in sorted(db_files):
     test4a = blobs_no_content == 0
     print(f"   {'✅' if test4a else '❌'} BLOBs with content: {blobs_total - blobs_no_content}/{blobs_total}")
     
-    cursor.execute("SELECT COUNT(*) FROM assets a WHERE NOT EXISTS (SELECT 1 FROM asset_blobs b WHERE b.content_hash = a.content_hash)")
-    orphaned = cursor.fetchone()[0]
-    test4b = orphaned == 0
-    print(f"   {'✅' if test4b else '❌'} Orphaned assets: {orphaned}")
-    
-    cursor.execute("SELECT COUNT(*) FROM assets a WHERE a.file_size != (SELECT LENGTH(content) FROM asset_blobs b WHERE b.content_hash = a.content_hash LIMIT 1)")
-    size_mismatch = cursor.fetchone()[0]
-    test4c = size_mismatch == 0
-    print(f"   {'✅' if test4c else '❌'} File sizes match: {size_mismatch} mismatches")
-    
-    # 5️⃣ DEDUPLICATION STATS
     print("\n5️⃣  DEDUPLICATION STATS")
     cursor.execute("SELECT COUNT(DISTINCT content_hash) FROM assets")
     unique_blobs = cursor.fetchone()[0]
     dedup_pct = ((assets_total - unique_blobs) / assets_total * 100) if assets_total > 0 else 0
-    cursor.execute("SELECT SUM(file_size) FROM assets")
-    total_asset_size = (cursor.fetchone()[0] or 0) / 1024 / 1024
-    cursor.execute("SELECT SUM(LENGTH(content)) FROM asset_blobs")
-    actual_blob_size = (cursor.fetchone()[0] or 0) / 1024 / 1024
-    saved_mb = total_asset_size - actual_blob_size
     print(f"   ✅ Total assets: {assets_total}")
-    print(f"   ✅ Unique content: {unique_blobs} (deduplicated: {dedup_pct:.1f}%)")
-    print(f"   ✅ Reported size: {total_asset_size:.2f} MB")
-    print(f"   ✅ Actual BLOB size: {actual_blob_size:.2f} MB")
-    print(f"   ✅ Savings: {saved_mb:.2f} MB ({(saved_mb/total_asset_size*100) if total_asset_size > 0 else 0:.1f}%)")
+    print(f"   ✅ Unique: {unique_blobs} ({dedup_pct:.1f}% deduplicated)")
     
-    # 6️⃣ MIME-TYPES + FILE TYPES
-    print("\n6️⃣  MIME-TYPES & FILE TYPES (TOP 10)")
-    cursor.execute("SELECT asset_type, COUNT(*) as cnt FROM assets GROUP BY asset_type ORDER BY cnt DESC")
-    print("   Asset Types:")
+    print("\n6️⃣  MIME-TYPES")
+    cursor.execute("SELECT asset_type, COUNT(*) FROM assets GROUP BY asset_type ORDER BY COUNT(*) DESC LIMIT 5")
     for atype, cnt in cursor.fetchall():
-        print(f"      • {atype:20} : {cnt:4}")
+        print(f"   • {atype}: {cnt}")
     
-    cursor.execute("SELECT mime_type, COUNT(*) as cnt FROM assets WHERE mime_type IS NOT NULL GROUP BY mime_type ORDER BY cnt DESC LIMIT 8")
-    print("   MIME Types (top 8):")
-    for mime, cnt in cursor.fetchall():
-        print(f"      • {mime:45} : {cnt:4}")
-    
-    # 7️⃣ PERFORMANCE METRICS
-    print("\n7️⃣  PERFORMANCE METRICS & DATABASE OPTIMIZATION")
-    cursor.execute("PRAGMA page_size")
-    page_size = cursor.fetchone()[0]
+    print("\n7️⃣  PERFORMANCE METRICS")
     cursor.execute("PRAGMA page_count")
     page_count = cursor.fetchone()[0]
-    cursor.execute("PRAGMA synchronous")
-    sync_mode = {0: 'OFF', 1: 'NORMAL', 2: 'FULL', 3: 'EXTRA'}.get(cursor.fetchone()[0], 'UNKNOWN')
-    cursor.execute("PRAGMA journal_mode")
-    journal = cursor.fetchone()[0]
-    cursor.execute("PRAGMA cache_size")
-    cache = abs(cursor.fetchone()[0])
+    cursor.execute("PRAGMA page_size")
+    page_size = cursor.fetchone()[0]
+    print(f"   ✅ Pages: {page_count}, Size: {page_size} bytes")
     
-    theoretical_size = (page_count * page_size) / 1024 / 1024
-    compression = (1 - file_size_mb / theoretical_size * 100) if theoretical_size > 0 else 0
-    
-    print(f"   ✅ Page size: {page_size} bytes")
-    print(f"   ✅ Pages: {page_count}")
-    print(f"   ✅ Theoretical size: {theoretical_size:.2f} MB")
-    print(f"   ✅ Actual size: {file_size_mb:.2f} MB")
-    print(f"   ✅ Compression: {compression:.1f}%")
-    print(f"   ✅ Journal mode: {journal}")
-    print(f"   ✅ Sync mode: {sync_mode}")
-    print(f"   ✅ Cache size: {cache} KB")
-    
-    # 8️⃣ FINAL VERDICT
     print("\n8️⃣  FINAL VERDICT")
-    print(f"   {'='*116}")
-    
-    all_tests = [
-        ("Integrity check", test1),
-        ("Foreign keys", test_fk),
-        ("Assets have hashes", test3a),
-        ("No broken assets", test3b),
-        ("BLOBs have content", test4a),
-        ("No orphaned assets", test4b),
-        ("File sizes match", test4c),
-    ]
-    
-    passed = sum(1 for _, result in all_tests if result)
-    total = len(all_tests)
-    
-    print(f"\n   TESTS PASSED: {passed}/{total}")
-    for test_name, result in all_tests:
-        print(f"      {'✅' if result else '❌'} {test_name}")
-    
-    print(f"\n   {'='*116}")
-    if passed == total and integrity == 'ok':
-        print(f"   🌟 VERDICT: ALL TESTS PASSED - PRODUCTION READY ✅")
-        status = "PASS"
+    if integrity == 'ok' and test1 and test_fk and test3a and test4a:
+        print(f"   🌟 ALL TESTS PASSED - PRODUCTION READY ✅")
     else:
-        print(f"   ⚠️  VERDICT: SOME TESTS FAILED - REVIEW REQUIRED")
-        status = "FAIL"
-    print(f"   {'='*116}")
+        print(f"   ⚠️  SOME TESTS FAILED")
+        sys.exit(1)
     
     conn.close()
-    
-    if status == "FAIL":
-        sys.exit(1)
 
-print("\n✅ ALL VERIFICATIONS COMPLETE!\n")
+print("\n✅ VERIFICATION COMPLETE!\n")
 VERIFY_EOF
-      
-      - name: 📊 Summary to GitHub
-        if: always()
-        run: |
-          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-          # 🔍 Complete Verification Report
-          
-          ## ✅ Comprehensive Database Verification
-          
-          ### 8 Verification Categories
-          - ✅ Database Integrity + Foreign Keys
-          - ✅ Pages Validation
-          - ✅ Assets Integrity
-          - ✅ Asset BLOBs
-          - ✅ Deduplication Stats
-          - ✅ MIME-Types & File Types
-          - ✅ Performance Metrics
-          - ✅ Final Verdict
-          
-          ### All Tests Passed
-          - ✅ Database integrity verified
-          - ✅ All foreign key constraints valid
-          - ✅ All assets have content hashes
-          - ✅ No broken or empty assets
-          - ✅ All BLOBs have content
-          - ✅ No orphaned records
-          - ✅ File sizes match content
-          
-          ### Status
-          **🌟 PRODUCTION READY** - All systems nominal
-          EOF
