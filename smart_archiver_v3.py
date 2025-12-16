@@ -5,6 +5,7 @@ ISO 28500:2017 compliant + proper directory structure
 Inspired by Internet Archive & BnF practices
 
 FIXED: Added comprehensive error handling for HTTP 500 and other network errors
+FIXED v2: Removed invalid timeout parameter from response.text()
 """
 
 import asyncio
@@ -244,7 +245,7 @@ class ProfessionalArchiver:
                 
                 if 'text/html' in content_type:
                     try:
-                        html = await response.text(errors='ignore', timeout=30)
+                        html = await response.text(errors='ignore')
                         await self._process_page(html, url, depth, dict(response.headers), session)
                         self.stats['pages'] += 1
                         logger.info(f"✅ Page [{depth}]: {url[:60]}")
