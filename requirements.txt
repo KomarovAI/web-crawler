@@ -4,3 +4,4 @@ python-dotenv==1.0.0
 lxml==4.9.3
 selenium==4.15.2
 undetected-chromedriver==3.5.4
+warcio==1.7.4
