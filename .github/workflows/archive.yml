@@ -71,21 +71,17 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: archive-$(cat domain.txt)
-          path: archive_$(cat domain.txt)/
+          name: archive-${{ hashFiles('.') }}
+          path: archive_*/
           retention-days: 90
       
       - name: Summary
         run: |
-          DOMAIN=$(cat domain.txt)
           echo "## ✅ Archive Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### v4 Improvements" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Timeout: 30s → **60s**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Retries: **3 attempts** with exponential backoff" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ MAX_DEPTH: 4 → **6 levels**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Timeout: 30s → 60s" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Retries: 3 attempts with exponential backoff" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ MAX_DEPTH: 4 → 6 levels" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ URL Normalization: removes ?page=1" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Intelligent BFS: Services > Locations > Blog" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📦 Artifact: archive_$DOMAIN" >> $GITHUB_STEP_SUMMARY
-          echo "⏱️ Status: $([ ${{ steps.archiver.outputs.status }} -eq 0 ] && echo 'SUCCESS ✅' || echo 'FAILED ❌')" >> $GITHUB_STEP_SUMMARY
