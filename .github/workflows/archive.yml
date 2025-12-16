@@ -1,65 +1,91 @@
-name: Web Archive with Resume Support
+name: Archive Website
 
 on:
+  schedule:
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      url:
-        description: 'Website URL to archive'
+      site_json:
+        description: 'Site JSON config'
         required: true
-        default: 'https://callmedley.com'
-      max_pages:
-        description: 'Max pages to crawl'
-        required: true
-        default: '500'
+        default: '{"url": "https://callmedley.com", "maxPages": 500}'
 
 jobs:
   archive:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     
     steps:
       - uses: actions/checkout@v4
       
+      - uses: actions/cache@v3
+        with:
+          path: .cache/pip
+          key: pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: pip-
+      
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-          cache: pip
-          cache-dependency-path: '**/requirements.txt'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
       
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt
       
-      - name: Parse inputs
-        id: config
+      - name: Extract site config
         run: |
-          URL="${{ github.event.inputs.url }}"
-          MAX_PAGES="${{ github.event.inputs.max_pages }}"
-          DOMAIN=${URL#*://}
-          DOMAIN=${DOMAIN%%/*}
-          DOMAIN=${DOMAIN//./_}
-          echo "domain=${DOMAIN}" >> $GITHUB_OUTPUT
-          echo "archive_dir=archive_${DOMAIN}" >> $GITHUB_OUTPUT
+          python3 << 'PYTHON'
+          import json
+          import os
+          
+          site = json.loads(os.environ['SITE_JSON'])
+          url = site['url']
+          maxpages = site.get('maxPages', 500)
+          domain = url.replace('https:', '').replace('http:', '').replace('//', '').split('/')[0].replace('.', '')
+          
+          with open('.env', 'w') as f:
+            f.write(f'START_URL={url}\n')
+            f.write(f'MAX_PAGES={maxpages}\n')
+          
+          with open('domain.txt', 'w') as f:
+            f.write(domain)
+          
+          print(f'CONFIG: url={url}, maxpages={maxpages}, domain={domain}')
+          PYTHON
+        env:
+          SITE_JSON: ${{ github.event.inputs.site_json || '{"url": "https://callmedley.com", "maxPages": 500}' }}
       
-      - name: Run archiver v4 with resume support
-        id: archive
+      - name: Run archiver v4
         run: |
-          python3 smart_archiver_v4.py "${{ github.event.inputs.url }}" "${{ github.event.inputs.max_pages }}"
+          cat .env
+          source .env
+          echo "🚀 Starting ArchiveBot v4"
+          echo "URL: $START_URL"
+          echo "MAX_PAGES: $MAX_PAGES"
+          echo "TIMEOUT: 60s (improved from 30s)"
+          echo "RETRIES: 3 attempts with exponential backoff"
+          echo "DEPTH: 6 levels (improved from 4)"
+          python3 smart_archiver_v4.py "$START_URL" "$MAX_PAGES"
           echo "status=$?" >> $GITHUB_OUTPUT
+        id: archiver
       
-      - name: Verify archive
-        if: steps.archive.outcome == 'success'
-        run: |
-          ARCHIVE_DIR="archive_${{ steps.config.outputs.domain }}"
-          echo "✅ Archive created: ${ARCHIVE_DIR}"
-          echo "📁 Directory structure:"
-          find "${ARCHIVE_DIR}" -type f | head -20
-          echo "📊 Size: $(du -sh "${ARCHIVE_DIR}" | cut -f1)"
-      
-      - name: Upload archive artifact
-        if: always()
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: archive-${{ steps.config.outputs.domain }}
-          path: archive_${{ steps.config.outputs.domain }}/
+          name: archive-$(cat domain.txt)
+          path: archive_$(cat domain.txt)/
           retention-days: 90
-          compression-level: 0
+      
+      - name: Summary
+        run: |
+          DOMAIN=$(cat domain.txt)
+          echo "## ✅ Archive Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### v4 Improvements" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Timeout: 30s → **60s**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Retries: **3 attempts** with exponential backoff" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ MAX_DEPTH: 4 → **6 levels**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ URL Normalization: removes ?page=1" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Intelligent BFS: Services > Locations > Blog" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Artifact: archive_$DOMAIN" >> $GITHUB_STEP_SUMMARY
+          echo "⏱️ Status: $([ ${{ steps.archiver.outputs.status }} -eq 0 ] && echo 'SUCCESS ✅' || echo 'FAILED ❌')" >> $GITHUB_STEP_SUMMARY
