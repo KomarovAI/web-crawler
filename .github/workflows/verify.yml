@@ -4,9 +4,6 @@ on:
   workflow_run:
     workflows: ["Web Crawler"]
     types: [completed]
-  schedule:
-    - cron: '0 */6 * * *'
-  workflow_dispatch:
 
 jobs:
   verify:
@@ -14,10 +11,10 @@ jobs:
     name: Complete Verification
     
     steps:
-      - name: 🐎 Checkout
+      - name: 🔧 Checkout
         uses: actions/checkout@v4
       
-      - name: 💾 Download artifacts
+      - name: 📦 Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -25,7 +22,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
         continue-on-error: true
       
-      - name: 🐠 Setup Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
@@ -48,7 +45,7 @@ if not db_files:
     print("\n❌ No databases found!")
     sys.exit(1)
 
-print(f"\n📁 Processing {len(db_files)} database(s)\n")
+print(f"\n📄 Processing {len(db_files)} database(s)\n")
 
 for db_file in sorted(db_files):
     domain = db_file.parent.name.replace('db-', '')
@@ -176,7 +173,7 @@ for db_file in sorted(db_files):
     pages_with_assets = cursor.fetchone()[0]
     avg_per_page = assets / pages if pages > 0 else 0
     print(f"   📄 Pages: {pages}")
-    📦 Assets: {assets} ({unique_assets} unique, {dedup_pct:.1f}% deduplicated)")
+    print(f"   📦 Assets: {assets} ({unique_assets} unique, {dedup_pct:.1f}% deduplicated)")
     print(f"   📦 Pages with assets: {pages_with_assets}")
     print(f"   📦 Avg assets/page: {avg_per_page:.1f}")
     print(f"   💾 HTML: {html_size:.2f} MB, Assets: {total_asset_size:.2f} MB, Total DB: {file_size_mb:.2f} MB")
@@ -196,7 +193,7 @@ for db_file in sorted(db_files):
 print("\n✅ Verification complete!\n")
 EOF
       
-      - name: 📈 GitHub Summary
+      - name: 📊 GitHub Summary
         if: always()
         run: |
           cat >> $GITHUB_STEP_SUMMARY << 'EOF'
@@ -221,5 +218,5 @@ EOF
           - Zero corruption detected ✅
           
           ### Status
-          **🔐 PRODUCTION READY** - All systems nominal
+          **🔒 PRODUCTION READY** - All systems nominal
           EOF
