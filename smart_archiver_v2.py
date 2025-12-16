@@ -25,10 +25,16 @@ logger = logging.getLogger(__name__)
 class WARCCompliantArchiver:
     """WARC/1.1 compliant archiver with BEST PRACTICES"""
     
-    def __init__(self, start_url: str, db_path: str = 'archive.db', 
+    def __init__(self, start_url: str, db_path: str = None, 
                  max_depth: int = 5, max_pages: int = 500):
         self.start_url = start_url
         self.domain = urlparse(start_url).netloc.lower()
+        
+        # Generate DB filename from domain
+        if db_path is None:
+            domain_name = self.domain.replace('.', '_')
+            db_path = f'{domain_name}.db'
+        
         self.db_path = Path(db_path)
         self.max_depth = max_depth
         self.max_pages = max_pages
@@ -347,6 +353,7 @@ class WARCCompliantArchiver:
         print(f"Checksum: {archive_checksum}")
         print(f"Standard: ISO 28500:2017")
         print(f"⚡ OPTIMIZATIONS: 50x pooling, lxml parser, batch assets")
+        print(f"DB File: {self.db_path}")
         print("="*70)
         
         self.conn.close()
@@ -364,7 +371,7 @@ async def main():
     url = sys.argv[1] if len(sys.argv) > 1 else 'https://callmedley.com'
     depth = int(sys.argv[2]) if len(sys.argv) > 2 else 5
     
-    archiver = WARCCompliantArchiver(url, 'archive.db', max_depth=depth)
+    archiver = WARCCompliantArchiver(url, max_depth=depth)
     await archiver.archive()
 
 if __name__ == '__main__':
