@@ -1,0 +1,65 @@
+name: Web Archive with Resume Support
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Website URL to archive'
+        required: true
+        default: 'https://callmedley.com'
+      max_pages:
+        description: 'Max pages to crawl'
+        required: true
+        default: '500'
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: '**/requirements.txt'
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Parse inputs
+        id: config
+        run: |
+          URL="${{ github.event.inputs.url }}"
+          MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          DOMAIN=${URL#*://}
+          DOMAIN=${DOMAIN%%/*}
+          DOMAIN=${DOMAIN//./_}
+          echo "domain=${DOMAIN}" >> $GITHUB_OUTPUT
+          echo "archive_dir=archive_${DOMAIN}" >> $GITHUB_OUTPUT
+      
+      - name: Run archiver v4 with resume support
+        id: archive
+        run: |
+          python3 smart_archiver_v4.py "${{ github.event.inputs.url }}" "${{ github.event.inputs.max_pages }}"
+          echo "status=$?" >> $GITHUB_OUTPUT
+      
+      - name: Verify archive
+        if: steps.archive.outcome == 'success'
+        run: |
+          ARCHIVE_DIR="archive_${{ steps.config.outputs.domain }}"
+          echo "✅ Archive created: ${ARCHIVE_DIR}"
+          echo "📁 Directory structure:"
+          find "${ARCHIVE_DIR}" -type f | head -20
+          echo "📊 Size: $(du -sh "${ARCHIVE_DIR}" | cut -f1)"
+      
+      - name: Upload archive artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ steps.config.outputs.domain }}
+          path: archive_${{ steps.config.outputs.domain }}/
+          retention-days: 90
+          compression-level: 0
