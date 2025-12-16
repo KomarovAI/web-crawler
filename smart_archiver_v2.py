@@ -249,58 +249,40 @@ class WARCCompliantArchiver:
         except sqlite3.IntegrityError:
             return
         
-        # Extract assets
+        # Extract assets from HTML
         assets = self.extractor.extract_assets(html, url)
         if assets:
             logger.info(f"Found {len(assets)} assets on {url}")
-            # ⚡ Batch downloads
-            result = await self._download_assets_batch(assets, self.domain, session)
-            logger.info(f"Assets - Downloaded: {result['downloaded']}, "
-                       f"Failed: {result['failed']}, "
-                       f"Skipped: {result['skipped']}")
-            self.stats['assets_downloaded'] += result['downloaded']
-            self.stats['assets_failed'] += result['failed']
+            # ⚡ Download and save in batches
+            await self._download_assets_batch(assets, session)
         
-        # Extract resources
-        for img in soup.find_all('img', src=True):
-            src = urljoin(url, img['src'])
-            if self._is_same_domain(src):
-                await self._store_link(page_id, src, 'image')
-        
-        for link in soup.find_all('link', href=True):
-            if 'stylesheet' in link.get('rel', []):
-                href = urljoin(url, link['href'])
-                if self._is_same_domain(href):
-                    await self._store_link(page_id, href, 'css')
-        
-        for script in soup.find_all('script', src=True):
-            src = urljoin(url, script['src'])
-            if self._is_same_domain(src):
-                await self._store_link(page_id, src, 'js')
-        
-        # Extract links
+        # Extract page links
         for a in soup.find_all('a', href=True):
             href = urljoin(url, a['href'])
             if self._is_same_domain(href) and href not in self.visited:
                 cursor = self.conn.cursor()
-                cursor.execute('INSERT INTO links (from_page_id, to_url, link_type) VALUES (?, ?, ?)',
-                             (page_id, href, 'page'))
-                self.queue.append((href, depth + 1))
+                try:
+                    cursor.execute('INSERT INTO links (from_page_id, to_url, link_type) VALUES (?, ?, ?)',
+                                 (page_id, href, 'page'))
+                    self.queue.append((href, depth + 1))
+                except sqlite3.IntegrityError:
+                    pass
         
         self.conn.commit()
     
-    async def _download_assets_batch(self, assets: list, domain: str, session):
+    async def _download_assets_batch(self, assets: list, session):
         """Download assets in batches for speed"""
-        result = {'downloaded': 0, 'failed': 0, 'skipped': 0}
-        
-        # Process in batches of 10
         batch_size = 10
+        total_downloaded = 0
+        total_failed = 0
+        total_skipped = 0
+        
         for i in range(0, len(assets), batch_size):
             batch = assets[i:i+batch_size]
             
             # Download batch concurrently
             tasks = [
-                self.extractor.download_and_save_asset(asset, domain, session)
+                self.extractor.download_and_save_asset(asset, self.domain, session)
                 for asset in batch
             ]
             
@@ -308,20 +290,15 @@ class WARCCompliantArchiver:
             
             for batch_result in batch_results:
                 if isinstance(batch_result, dict):
-                    result['downloaded'] += batch_result.get('downloaded', 0)
-                    result['failed'] += batch_result.get('failed', 0)
-                    result['skipped'] += batch_result.get('skipped', 0)
-                else:
-                    result['failed'] += 1
+                    total_downloaded += batch_result.get('downloaded', 0)
+                    total_failed += batch_result.get('failed', 0)
+                    total_skipped += batch_result.get('skipped', 0)
         
-        return result
-    
-    async def _store_link(self, page_id: int, url: str, link_type: str):
-        """Store link reference"""
-        cursor = self.conn.cursor()
-        cursor.execute('INSERT INTO links (from_page_id, to_url, link_type) VALUES (?, ?, ?)',
-                     (page_id, url, link_type))
-        self.conn.commit()
+        if total_downloaded > 0 or total_failed > 0:
+            logger.info(f"Assets - Downloaded: {total_downloaded}, Failed: {total_failed}, Skipped: {total_skipped}")
+        
+        self.stats['assets_downloaded'] += total_downloaded
+        self.stats['assets_failed'] += total_failed
     
     def _is_same_domain(self, url: str) -> bool:
         try:
@@ -355,7 +332,7 @@ class WARCCompliantArchiver:
         cursor.execute('SELECT SUM(file_size) FROM assets WHERE domain = ?', (self.domain,))
         total_size = cursor.fetchone()[0] or 0
         
-        db_size = self.db_path.stat().st_size / 1024 / 1024
+        db_size = self.db_path.stat().st_size / 1024 / 1024 if self.db_path.exists() else 0
         
         print("\n" + "="*70)
         print("✅ WARC-COMPLIANT ARCHIVE COMPLETE")
