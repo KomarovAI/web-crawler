@@ -65,8 +65,6 @@ jobs:
           echo "RETRIES: 3 attempts with exponential backoff"
           echo "DEPTH: 6 levels (improved from 4)"
           python3 smart_archiver_v4.py "$START_URL" "$MAX_PAGES"
-          echo "status=$?" >> $GITHUB_OUTPUT
-        id: archiver
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
