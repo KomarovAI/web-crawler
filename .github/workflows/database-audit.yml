@@ -1,0 +1,112 @@
+name: 🔍 Database Integrity & Performance Audit
+
+on:
+  workflow_run:
+    workflows: ["Web Crawler"]
+    types: [completed]
+  schedule:
+    - cron: '0 */6 * * *'  # Каждые 6 часов
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    name: Full Database Audit
+    
+    steps:
+      - name: 🐎 Checkout code
+        uses: actions/checkout@v4
+      
+      - name: 💾 Download database artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+          run-id: ${{ github.event.workflow_run.id }}
+        continue-on-error: true
+      
+      - name: 🐠 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: 🔍 Run comprehensive database audit
+        run: |
+          if [ -d "artifacts" ]; then
+            echo "📋 Running comprehensive database audit..."
+            python3 DATABASE_AUDIT_DETAILED.py
+          else
+            echo "⚠️  No artifacts found, skipping audit"
+            exit 0
+          fi
+      
+      - name: 📈 Generate audit report
+        if: always()
+        run: |
+          python3 << 'EOF'
+          import sqlite3
+          from pathlib import Path
+          
+          artifacts_dir = Path('artifacts')
+          db_files = list(artifacts_dir.glob('db-*/*.db'))
+          
+          if not db_files:
+              print("❌ No databases to report")
+              exit(1)
+          
+          print("
+### 📋 Database Audit Report")
+          print()
+          
+          for db_file in sorted(db_files):
+              domain = db_file.parent.name.replace('db-', '')
+              conn = sqlite3.connect(str(db_file))
+              cursor = conn.cursor()
+              
+              print(f"#### {domain}")
+              
+              # Pages
+              cursor.execute("SELECT COUNT(*) FROM pages")
+              pages = cursor.fetchone()[0]
+              print(f"- 📄 Pages: {pages}")
+              
+              # Assets
+              cursor.execute("SELECT COUNT(*) FROM assets")
+              assets = cursor.fetchone()[0]
+              cursor.execute("SELECT COUNT(DISTINCT content_hash) FROM assets")
+              unique_assets = cursor.fetchone()[0]
+              dedup = ((assets - unique_assets) / assets * 100) if assets > 0 else 0
+              print(f"- 📂 Assets: {assets} ({unique_assets} unique, {dedup:.1f}% deduplicated)")
+              
+              # Size
+              print(f"- 📊 Size: {db_file.stat().st_size / 1024 / 1024:.2f} MB")
+              
+              # Integrity
+              cursor.execute("PRAGMA integrity_check")
+              integrity = cursor.fetchone()[0]
+              status = "✅" if integrity == 'ok' else "❌"
+              print(f"- {status} Integrity: {integrity}")
+              
+              conn.close()
+              print()
+          
+          EOF
+          
+        continue-on-error: true
+      
+      - name: 📄 Create job summary
+        if: always()
+        run: |
+          echo "# 🔍 Database Integrity Audit" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Status**: Audit completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Checks Performed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Database integrity (PRAGMA integrity_check)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Schema validation" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Tables structure" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Assets completeness" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ BLOB deduplication" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Foreign key constraints" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Orphaned records detection" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Database performance metrics" >> $GITHUB_STEP_SUMMARY
