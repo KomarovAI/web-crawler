@@ -1,0 +1,136 @@
+name: crawl (single site)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Website URL to crawl'
+        required: true
+        default: 'https://example.com'
+      max_pages:
+        description: 'Max pages to crawl'
+        required: true
+        default: '50'
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Setup crawl config
+        run: |
+          python3 << 'PYTHON'
+          import os
+          url = os.environ.get('TARGET_URL', 'https://example.com')
+          max_pages = os.environ.get('MAX_PAGES', '50')
+          
+          with open('.env', 'w') as f:
+            f.write(f"START_URL={url}\n")
+            f.write(f"MAX_PAGES={max_pages}\n")
+            f.write(f"LOG_LEVEL=INFO\n")
+          
+          # Generate domain name for filename
+          domain = url.replace('https://', '').replace('http://', '').split('/')[0].replace('.', '_')
+          with open('domain.txt', 'w') as f:
+            f.write(domain)
+          PYTHON
+        env:
+          TARGET_URL: ${{ github.event.inputs.target_url || 'https://example.com' }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages || '50' }}
+
+      - name: Run crawler
+        run: |
+          domain=$(cat domain.txt)
+          python3 smart_archiver_v2.py --url "$START_URL" --max-pages "$MAX_PAGES" --db "${domain}.db"
+        env:
+          START_URL: ${{ github.event.inputs.target_url || 'https://example.com' }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages || '50' }}
+
+      - name: Export to WARC
+        run: |
+          domain=$(cat domain.txt)
+          python3 export_to_warc.py "${domain}.db" "${domain}.warc.gz"
+        continue-on-error: true
+
+      - name: Export to WACZ
+        run: |
+          domain=$(cat domain.txt)
+          python3 export_to_wacz.py "${domain}.db" "${domain}.wacz"
+        continue-on-error: true
+
+      - name: Generate report
+        run: |
+          domain=$(cat domain.txt)
+          python3 << 'PYTHON'
+          import sqlite3
+          import os
+          from datetime import datetime
+          
+          domain = os.environ['DOMAIN']
+          db_file = f"{domain}.db"
+          
+          if os.path.exists(db_file):
+            conn = sqlite3.connect(db_file)
+            c = conn.cursor()
+            
+            c.execute('SELECT COUNT(*) FROM pages')
+            page_count = c.fetchone()[0]
+            
+            c.execute('SELECT COUNT(*) FROM assets')
+            asset_count = c.fetchone()[0]
+            
+            c.execute('SELECT SUM(file_size)/(1024*1024) FROM assets')
+            asset_size = c.fetchone()[0] or 0
+            
+            conn.close()
+            
+            report = f"""# Crawl Report
+
+**Date:** {datetime.now().isoformat()}
+**Status:** ✅ SUCCESS
+
+## Results
+- Pages crawled: {page_count}
+- Assets extracted: {asset_count}
+- Asset size: {asset_size:.1f} MB
+- Database: {domain}.db
+
+## Files
+- `{domain}.db` - SQLite database (queryable)
+- `{domain}.warc.gz` - ISO 28500:2017 archive
+- `{domain}.wacz` - Browser-playable package
+"""
+          else:
+            report = "# Crawl Report\n\n⚠️ No database found"
+          
+          with open('CRAWL_REPORT.md', 'w') as f:
+            f.write(report)
+          PYTHON
+        env:
+          DOMAIN: ${{ runner.temp }}/domain
+        continue-on-error: true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crawl-results
+          path: |
+            *.db
+            *.warc.gz
+            *.wacz
+            CRAWL_REPORT.md
+          retention-days: 90
