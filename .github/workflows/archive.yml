@@ -5,10 +5,14 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      site_json:
-        description: 'Site JSON config'
-        required: true
-        default: '{"url": "https://callmedley.com", "maxPages": 500}'
+      site_url:
+        description: 'Site URL to archive'
+        required: false
+        default: 'https://callmedley.com'
+      max_pages:
+        description: 'Maximum pages to crawl'
+        required: false
+        default: '500'
 
 jobs:
   archive:
@@ -37,9 +41,8 @@ jobs:
           import json
           import os
           
-          site = json.loads(os.environ['SITE_JSON'])
-          url = site['url']
-          maxpages = site.get('maxPages', 500)
+          url = os.environ['START_URL']
+          maxpages = int(os.environ['MAX_PAGES'])
           domain = url.replace('https:', '').replace('http:', '').replace('//', '').split('/')[0].replace('.', '')
           
           with open('.env', 'w') as f:
@@ -52,7 +55,8 @@ jobs:
           print(f'CONFIG: url={url}, maxpages={maxpages}, domain={domain}')
           PYTHON
         env:
-          SITE_JSON: ${{ github.event.inputs.site_json || '{"url": "https://callmedley.com", "maxPages": 500}' }}
+          START_URL: ${{ github.event.inputs.site_url || 'https://callmedley.com' }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages || '500' }}
       
       - name: Run archiver v4
         run: |
