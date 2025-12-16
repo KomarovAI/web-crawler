@@ -4,8 +4,7 @@ Professional WARC-Compliant Web Archiver
 ISO 28500:2017 compliant + proper directory structure
 Inspired by Internet Archive & BnF practices
 
-FIXED: Added comprehensive error handling for HTTP 500 and other network errors
-FIXED v2: Removed invalid timeout parameter from response.text()
+FIXED v3: Corrected Path handling - always use Path objects internally, convert to string only for DB
 """
 
 import asyncio
@@ -302,8 +301,8 @@ class ProfessionalArchiver:
         
         parsed = urlparse(url)
         
-        # Generate safe file path
-        file_path = self._generate_page_path(parsed.path)
+        # Generate safe file path (ALWAYS Path object)
+        file_path = self._generate_page_path(parsed.path)  # Returns Path
         full_path = self.pages_dir / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -329,6 +328,9 @@ class ProfessionalArchiver:
         # Store in CDX-index
         cursor = self.conn.cursor()
         try:
+            # IMPORTANT: Convert Path to string for database storage
+            relative_path = str(full_path.relative_to(self.archive_path))
+            
             cursor.execute('''
                 INSERT INTO cdx_index 
                 (timestamp, uri, status_code, content_type, content_hash, 
@@ -336,12 +338,12 @@ class ProfessionalArchiver:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (cdx_timestamp, url, 200, 'text/html', 
                   hashlib.md5(html_bytes).hexdigest(), payload_digest,
-                  str(file_path.relative_to(self.archive_path)), len(html)))
+                  relative_path, len(html)))
             
             cursor.execute('''
                 INSERT INTO pages (uri, file_path, title, depth)
                 VALUES (?, ?, ?, ?)
-            ''', (url, str(file_path.relative_to(self.archive_path)), title, depth))
+            ''', (url, relative_path, title, depth))
             
             self.conn.commit()
         except sqlite3.IntegrityError:
@@ -430,13 +432,14 @@ class ProfessionalArchiver:
                     with open(file_path, 'wb') as f:
                         f.write(content)
                 
-                # Store in database
+                # Store in database - CONVERT PATH TO STRING
                 cursor = self.conn.cursor()
+                relative_path = str(file_path.relative_to(self.archive_path))
                 cursor.execute('''
                     INSERT OR IGNORE INTO assets
                     (uri, asset_type, file_path, content_hash, file_size, mime_type)
                     VALUES (?, ?, ?, ?, ?, ?)
-                ''', (asset_url, asset_type, str(file_path.relative_to(self.archive_path)),
+                ''', (asset_url, asset_type, relative_path,
                       content_hash, len(content), response.content_type))
                 self.conn.commit()
                 self.stats['assets'] = self.stats.get('assets', 0) + 1
@@ -447,16 +450,16 @@ class ProfessionalArchiver:
             logger.debug(f"⚠️  Asset download failed: {asset.get('url', 'unknown')} - {e}")
             self.stats['failed_assets'] = self.stats.get('failed_assets', 0) + 1
     
-    def _generate_page_path(self, url_path: str) -> str:
-        """Generate safe file path"""
+    def _generate_page_path(self, url_path: str) -> Path:
+        """Generate safe file path - RETURNS Path OBJECT"""
         if not url_path or url_path == '/':
-            return 'index.html'
+            return Path('index.html')
         
         path = url_path.strip('/')
         if not path.endswith('.html'):
             path = f"{path}/index.html"
         
-        return path
+        return Path(path)
     
     def _is_same_domain(self, url: str) -> bool:
         try:
