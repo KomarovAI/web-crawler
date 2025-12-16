@@ -122,7 +122,7 @@ class AssetExtractor:
     async def download_asset(self, session, url: str, timeout: int = 10) -> bytes:
         """Скачать один ассет"""
         try:
-            async with session.get(url, timeout=timeout, ssl=False) as resp:
+            async with session.get(url, timeout=timeout, ssl=True) as resp:
                 if resp.status == 200:
                     return await resp.read()
                 else:
@@ -130,7 +130,7 @@ class AssetExtractor:
         except asyncio.TimeoutError:
             logger.warning(f"Timeout downloading {url}")
         except Exception as e:
-            logger.debug(f"Failed to download {url}: {e}")
+            logger.warning(f"Failed to download {url}: {type(e).__name__}: {e}")
         return None
     
     async def asset_exists(self, url: str) -> bool:
@@ -141,7 +141,7 @@ class AssetExtractor:
                 (url,)
             )
             return cursor.fetchone() is not None
-        except:
+        except Exception:
             return False
     
     async def save_asset(self, url: str, content: bytes, domain: str, 
