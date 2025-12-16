@@ -36,6 +36,14 @@ class AssetExtractor:
                 return mime
         return 'application/octet-stream'
     
+    def _generate_asset_path(self, url: str) -> str:
+        """Генерировать путь ассета для БД"""
+        parsed = urlparse(url)
+        path = parsed.path or '/index.html'
+        if parsed.query:
+            path += f"?{parsed.query}"
+        return path
+    
     def extract_assets(self, html: str, base_url: str) -> list:
         """Найти все ассеты в HTML"""
         try:
@@ -152,6 +160,7 @@ class AssetExtractor:
         
         try:
             content_hash = hashlib.sha256(content).hexdigest()
+            asset_path = self._generate_asset_path(url)
             
             # INSERT OR IGNORE INTO asset_blobs
             self.conn.execute('''
@@ -163,9 +172,9 @@ class AssetExtractor:
             # INSERT INTO assets
             self.conn.execute('''
                 INSERT INTO assets 
-                (url, content_hash, mime_type, asset_type, domain, extracted_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ''', (url, content_hash, mime, asset_type, domain))
+                (url, domain, path, asset_type, content_hash, file_size, mime_type, extracted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (url, domain, asset_path, asset_type, content_hash, len(content), mime))
             
             self.conn.commit()
             return True
