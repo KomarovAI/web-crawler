@@ -1,0 +1,83 @@
+# Multi-stage build for minimal image
+FROM debian:bookworm-slim as base
+
+# Set environment
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+WORKDIR /app
+
+# Install all download tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Core utilities
+    wget \
+    curl \
+    git \
+    ca-certificates \
+    # HTTrack
+    httrack \
+    # Rust for Monolith
+    cargo \
+    rustc \
+    # Build dependencies
+    build-essential \
+    pkg-config \
+    # Python
+    python3 \
+    python3-pip \
+    python3-venv \
+    # Utilities
+    tar \
+    gzip \
+    zip \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Monolith
+RUN cargo install monolith --locked && \
+    rm -rf /root/.cargo
+
+# Create app structure
+RUN mkdir -p /app/downloads /app/scripts
+
+# Copy scripts
+COPY cli.sh /app/scripts/
+COPY site_downloader.py /app/scripts/
+
+# Make scripts executable
+RUN chmod +x /app/scripts/cli.sh /app/scripts/site_downloader.py
+
+# Create Python virtual environment
+RUN python3 -m venv /app/venv
+ENV PATH=/app/venv/bin:$PATH
+
+# Install Python dependencies
+COPY requirements-downloader.txt /app/
+RUN pip install --no-cache-dir -r /app/requirements-downloader.txt || true
+
+# Final stage
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Copy only essentials from builder
+COPY --from=base /usr/bin/wget /usr/bin/
+COPY --from=base /usr/bin/curl /usr/bin/
+COPY --from=base /usr/bin/httrack /usr/bin/
+COPY --from=base /root/.cargo/bin/monolith /usr/local/bin/
+COPY --from=base /usr/bin/python3 /usr/bin/
+COPY --from=base /usr/lib /usr/lib
+COPY --from=base /app /app
+
+# Verify tools
+RUN echo "\n🐫 Checking installed tools...\n" && \
+    which wget && echo "✅ wget" && \
+    which curl && echo "✅ curl" && \
+    which httrack && echo "✅ httrack" && \
+    which monolith && echo "✅ monolith" && \
+    which python3 && echo "✅ python3" && \
+    echo "
+🌟 All tools installed!"
+
+# Default command
+ENTRYPOINT ["/app/scripts/cli.sh"]
+CMD ["download", "https://example.com", "httrack"]
