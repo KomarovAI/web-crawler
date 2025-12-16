@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 import logging
 from datetime import datetime
 from collections import defaultdict
+from asset_extractor import AssetExtractor
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
@@ -36,6 +37,9 @@ class WARCCompliantArchiver:
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=NORMAL')
         self._init_db()
+        
+        # Initialize Asset Extractor
+        self.extractor = AssetExtractor(self.conn)
         
         self.visited = {}
         self.queue = [(start_url, 0)]
@@ -175,13 +179,13 @@ class WARCCompliantArchiver:
                 
                 if 'text/html' in content_type:
                     html = await response.text(errors='ignore')
-                    await self._process_page(html, url, depth, dict(response.headers))
+                    await self._process_page(html, url, depth, dict(response.headers), session)
                     self.stats['pages'] += 1
                     logger.info(f"✅ Page [{depth}]: {url[:60]}")
         except Exception as e:
             logger.debug(f"Error: {url} - {e}")
     
-    async def _process_page(self, html: str, url: str, depth: int, headers: dict):
+    async def _process_page(self, html: str, url: str, depth: int, headers: dict, session):
         """Process page with WARC format"""
         soup = BeautifulSoup(html, 'html.parser')
         parsed = urlparse(url)
@@ -226,22 +230,38 @@ class WARCCompliantArchiver:
         except sqlite3.IntegrityError:
             return
         
-        # Extract resources
+        # 🆕 Extract assets from HTML using Asset Extractor
+        assets = self.extractor.extract_assets(html, url)
+        if assets:
+            logger.info(f"Found {len(assets)} assets on {url}")
+            # 🆕 Download & save assets
+            result = await self.extractor.download_and_save_assets(
+                assets,
+                self.domain,
+                session
+            )
+            logger.info(f"Assets - Downloaded: {result['downloaded']}, "
+                       f"Failed: {result['failed']}, "
+                       f"Skipped: {result['skipped']}")
+            self.stats['assets_downloaded'] += result['downloaded']
+            self.stats['assets_failed'] += result['failed']
+        
+        # Extract resources (legacy)
         for img in soup.find_all('img', src=True):
             src = urljoin(url, img['src'])
             if self._is_same_domain(src):
-                await self._store_asset(page_id, src, 'image')
+                await self._store_link(page_id, src, 'image')
         
         for link in soup.find_all('link', href=True):
             if 'stylesheet' in link.get('rel', []):
                 href = urljoin(url, link['href'])
                 if self._is_same_domain(href):
-                    await self._store_asset(page_id, href, 'css')
+                    await self._store_link(page_id, href, 'css')
         
         for script in soup.find_all('script', src=True):
             src = urljoin(url, script['src'])
             if self._is_same_domain(src):
-                await self._store_asset(page_id, src, 'js')
+                await self._store_link(page_id, src, 'js')
         
         # Extract links
         for a in soup.find_all('a', href=True):
@@ -254,42 +274,12 @@ class WARCCompliantArchiver:
         
         self.conn.commit()
     
-    async def _store_asset(self, page_id: int, url: str, asset_type: str):
-        """Store asset with deduplication"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, ssl=True, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                    if response.status == 200:
-                        content = await response.read()
-                        content_hash = hashlib.sha256(content).hexdigest()
-                        
-                        parsed = urlparse(url)
-                        import mimetypes
-                        mime_type, _ = mimetypes.guess_type(parsed.path)
-                        
-                        cursor = self.conn.cursor()
-                        try:
-                            cursor.execute('''
-                                INSERT INTO assets
-                                (url, domain, path, asset_type, content_hash, file_size, mime_type)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            ''', (url, self.domain, parsed.path, asset_type, content_hash, len(content), mime_type))
-                            
-                            cursor.execute('''
-                                INSERT OR IGNORE INTO asset_blobs
-                                (content_hash, content)
-                                VALUES (?, ?)
-                            ''', (content_hash, content))
-                            
-                            cursor.execute('INSERT INTO links (from_page_id, to_url, link_type) VALUES (?, ?, ?)',
-                                         (page_id, url, asset_type))
-                            
-                            self.conn.commit()
-                            self.stats[asset_type] += 1
-                        except sqlite3.IntegrityError:
-                            pass
-        except Exception as e:
-            logger.debug(f"Asset error {url}: {e}")
+    async def _store_link(self, page_id: int, url: str, link_type: str):
+        """Store link reference"""
+        cursor = self.conn.cursor()
+        cursor.execute('INSERT INTO links (from_page_id, to_url, link_type) VALUES (?, ?, ?)',
+                     (page_id, url, link_type))
+        self.conn.commit()
     
     def _is_same_domain(self, url: str) -> bool:
         try:
@@ -331,7 +321,9 @@ class WARCCompliantArchiver:
         print(f"Domain: {self.domain}")
         print(f"Pages: {pages}")
         print(f"Assets: {assets}")
-        print(f"Total size: {total_size / 1024 / 1024:.2f} MB")
+        print(f"Assets downloaded: {self.stats['assets_downloaded']}")
+        print(f"Assets failed: {self.stats['assets_failed']}")
+        print(f"Total asset size: {total_size / 1024 / 1024:.2f} MB")
         print(f"DB size: {db_size:.2f} MB")
         print(f"Checksum: {archive_checksum}")
         print(f"Standard: ISO 28500:2017")
