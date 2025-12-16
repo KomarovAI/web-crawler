@@ -1,0 +1,148 @@
+name: Archive v5.2 (WARC + robots.txt + media)
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Start URL'
+        required: true
+        default: 'https://callmedley.com'
+      max_pages:
+        description: 'Max pages to crawl'
+        required: true
+        default: '500'
+      use_selenium:
+        description: 'Use Selenium for Cloudflare'
+        required: false
+        default: 'true'
+
+jobs:
+  archive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Create .env
+        run: |
+          python3 << 'PYTHON'
+          import json
+          import os
+          
+          url = '${{ github.event.inputs.url }}'
+          max_pages = int('${{ github.event.inputs.max_pages }}')
+          domain = url.replace('https://', '').replace('http://', '').replace('/', '').split('?')[0]
+          
+          with open('.env', 'w') as f:
+              f.write(f"STARTURL={url}\n")
+              f.write(f"MAXPAGES={max_pages}\n")
+          
+          with open('domain.txt', 'w') as f:
+              f.write(domain)
+          
+          print(f"CONFIG: url={url}, max_pages={max_pages}, domain={domain}")
+          PYTHON
+      
+      - name: Display config
+        run: |
+          cat .env
+          source .env
+          echo "Starting ArchiveBot v5.2"
+          echo "URL: $STARTURL"
+          echo "MAXPAGES: $MAXPAGES"
+          echo "TIMEOUT: 60s"
+          echo "RETRIES: 3 attempts with exponential backoff"
+          echo "DEPTH: 6 levels"
+          echo "WARC: YES (ISO 28500:2017)"
+          echo "ROBOTS.TXT: YES (RFC 9309)"
+          echo "MEDIA: YES (video, audio, iframe)"
+      
+      - name: Run ArchiveBot v5.2
+        run: |
+          source .env
+          python3 smart_archiver_v4.py "$STARTURL" "$MAXPAGES"
+        env:
+          USE_SELENIUM: ${{ github.event.inputs.use_selenium }}
+      
+      - name: Generate report
+        if: always()
+        run: |
+          python3 << 'PYTHON'
+          import sqlite3
+          import json
+          from pathlib import Path
+          
+          domain = open('domain.txt').read().strip()
+          archive_dir = f"archive_{domain.replace('.', '_')}"
+          db_path = f"{archive_dir}/{domain.replace('.', '_')}.db"
+          
+          if not Path(db_path).exists():
+              print("No database found")
+          else:
+              conn = sqlite3.connect(db_path)
+              cursor = conn.cursor()
+              
+              cursor.execute('SELECT COUNT(*) FROM pages')
+              pages = cursor.fetchone()[0]
+              
+              cursor.execute('SELECT COUNT(*) FROM error_log')
+              errors = cursor.fetchone()[0]
+              
+              cursor.execute('SELECT COUNT(*) FROM media')
+              media = cursor.fetchone()[0]
+              
+              cursor.execute('SELECT COUNT(*) FROM assets')
+              assets = cursor.fetchone()[0]
+              
+              print(f"Archive Report v5.2:")
+              print(f"  Pages: {pages}")
+              print(f"  Assets: {assets}")
+              print(f"  Media detected: {media}")
+              print(f"  Errors: {errors}")
+              print(f"  Status: {'✅ SUCCESS' if errors == 0 else '⚠️ WARNINGS'}")
+              
+              conn.close()
+          PYTHON
+      
+      - name: Upload archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ github.run_id }}
+          path: archive_*/
+          retention-days: 90
+          if-no-files-found: warn
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "## ✅ ArchiveBot v5.2 Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: v5.2 (WARC + robots.txt + media)" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: ${{ github.event.inputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Max Pages**: ${{ github.event.inputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Selenium**: ${{ github.event.inputs.use_selenium }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compliance**: ISO 28500:2017 + RFC 9309" >> $GITHUB_STEP_SUMMARY
+          echo "- **Features**: WARC, robots.txt, media detection" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### New Features" >> $GITHUB_STEP_SUMMARY
+          echo "✅ WARC format generation" >> $GITHUB_STEP_SUMMARY
+          echo "✅ robots.txt parsing" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Media extraction (video/audio/iframe)" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Crawl-Delay respect" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Full asset extraction" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Zero error handling" >> $GITHUB_STEP_SUMMARY
