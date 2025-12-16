@@ -3,7 +3,8 @@
 **Status:** ✅ PRODUCTION READY  
 **Standard:** ISO 28500:2017 (WARC/1.1)  
 **Last Updated:** December 16, 2025  
-**Features:** Asset Extractor ✨ | Full Deduplication | Browser-Playable
+**Features:** Asset Extractor ✨ | Full Deduplication | Browser-Playable  
+**Repo Size:** OPTIMIZED (removed legacy code)
 
 ---
 
@@ -34,7 +35,7 @@ A **production-grade web archiver** that creates industry-standard archives comp
 
 ---
 
-## 📦 Core Files
+## 📦 Core Files (Slim & Clean)
 
 | File | Purpose | Size |
 |------|---------|------|
@@ -43,10 +44,13 @@ A **production-grade web archiver** that creates industry-standard archives comp
 | **export_to_warc.py** | Export SQLite → WARC | 4.5 KB |
 | **export_to_wacz.py** | Create WACZ packages | 6.4 KB |
 | **database_utils.py** | Database utilities | 10.6 KB |
+| **database_schema.sql** | Schema definition | 4.7 KB |
 | **requirements.txt** | Python dependencies | 59 bytes |
 | **Dockerfile** | Container setup | 1.3 KB |
+| **config_production.py** | Production config | 3.9 KB |
 
-**Total:** ~47 KB core code + 12 KB documentation
+**Total:** ~52 KB core code (NO bloat!)  
+**Removed:** 6 obsolete files (~43 KB)  
 
 ---
 
@@ -107,18 +111,6 @@ Automatic extraction and deduplication of:
 📱  Meta Images (OG, Twitter)
 ```
 
-### How It Works
-
-```python
-# Automatic extraction during archiving
-1. Parse HTML
-2. Find all asset URLs
-3. Check for duplicates
-4. Download with retries
-5. Hash & deduplicate
-6. Store in SQLite BLOB
-```
-
 ### Benefits
 
 - ✅ **Complete Archives** - Includes styling and images
@@ -144,18 +136,6 @@ asset_blobs    - Binary content (deduplicated)
 revisit_records - Duplicate tracking
 cdx             - Index for fast lookups
 metadata        - Archive information
-```
-
-### Asset Storage
-
-```sql
--- Single asset can appear multiple times
-Assets:       url (unique)
-Blobs:        content_hash (unique)
-
--- Example: 150 assets, 120 unique content hashes
-Duplicate detection: Automatic
-Waste prevention:    ~25 MB saved!
 ```
 
 ---
@@ -238,19 +218,6 @@ image_data = cursor.fetchone()[0]
 
 with open('logo.png', 'wb') as f:
     f.write(image_data)
-```
-
-### Archive Statistics
-
-```sql
--- Overall stats
-SELECT 
-  COUNT(DISTINCT p.url) as pages,
-  COUNT(DISTINCT a.url) as assets,
-  (SELECT COUNT(*) FROM asset_blobs) as unique_assets,
-  SUM(a.file_size) / 1024 / 1024 as total_size_mb
-FROM pages p
-LEFT JOIN assets a ON p.domain = a.domain;
 ```
 
 ---
@@ -355,11 +322,12 @@ docker run -it web-crawler python3 smart_archiver_v2.py https://example.com 5
 
 ## ✨ Recent Updates
 
-### Version 2.2 (Dec 16, 2025)
+### Version 2.3 (Dec 16, 2025)
 
 - ✅ **Asset Extractor** - Automatic image/CSS/JS/font extraction
 - ✅ **Security Hardening** - SSL/TLS verification enabled
-- ✅ **Code Cleanup** - Removed redundant documentation
+- ✅ **Code Cleanup** - Removed 6 redundant files (~43 KB saved)
+- 🧹 **Repo Optimization** - Production-focused structure
 - ✅ **Production Ready** - All BEST_PRACTICES implemented
 
 ---
@@ -423,6 +391,7 @@ Integrate with archival systems
 ✅ Production-ready code
 ✅ Zero external APIs required
 ✅ Long-term preservation support
+🧹 SLIM & OPTIMIZED (~52 KB core)
 ```
 
 ---
@@ -435,6 +404,7 @@ python3 smart_archiver_v2.py https://yoursite.com 5
 
 ---
 
-**Last Updated:** December 16, 2025, 10:06 AM MSK  
+**Last Updated:** December 16, 2025, 10:15 AM MSK  
 **Status:** ✅ Production Ready  
-**Commits:** 7 (Asset Extractor + Security Fixes + Cleanup)  
+**Commits:** 14 (Asset Extractor + Cleanup)  
+**Repo Size:** OPTIMIZED (removed legacy code)  
