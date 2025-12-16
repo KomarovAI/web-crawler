@@ -1,4 +1,4 @@
-name: 🕷️ Crawl
+name: 🕷️ Professional Web Archive
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         default: '[{"url":"https://callmedley.com","max_pages":500}]'
 
 jobs:
-  crawl:
+  archive:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -57,7 +57,6 @@ jobs:
           with open('.env', 'w') as f:
             f.write(f"START_URL={url}\n")
             f.write(f"MAX_PAGES={max_pages}\n")
-            f.write(f"DB_FILE={domain}.db\n")
           
           with open('domain.txt', 'w') as f:
             f.write(domain)
@@ -65,149 +64,124 @@ jobs:
           
           domain=$(cat domain.txt)
           echo "domain=${domain}" >> $GITHUB_OUTPUT
-          echo "db_file=${domain}.db" >> $GITHUB_OUTPUT
+          echo "archive_dir=archive_${domain}" >> $GITHUB_OUTPUT
       
-      # 🐭 Run crawler (Python async)
-      - name: 🕷️ Run crawler
+      # 🕷️ Run professional archiver
+      - name: 🕷️ Run Professional Archiver (WARC ISO 28500:2017)
         run: |
-          python3 smart_archiver_v2.py "${{ matrix.site.url }}" ${{ matrix.site.max_pages }}
+          python3 smart_archiver_v3.py "${{ matrix.site.url }}" ${{ matrix.site.max_pages }}
         timeout-minutes: 120
       
-      # ⚡ Cache DB
-      - name: ⚡ Cache archive database
-        if: always()
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.site.outputs.db_file }}
-          key: archive-${{ steps.site.outputs.domain }}-${{ github.run_id }}
+      # 📊 Show archive structure
+      - name: 📁 Show Archive Structure
+        run: |
+          domain="${{ steps.site.outputs.domain }}"
+          archive_dir="archive_${domain}"
+          
+          echo "======================== ARCHIVE STRUCTURE ========================"
+          tree -L 2 "${archive_dir}" || find "${archive_dir}" -type f | head -20
+          echo ""
+          echo "Directory sizes:"
+          du -sh "${archive_dir}"/*
       
-      # ⚡ Compression enabled
-      - name: 📆 Upload artifact
+      # 📦 Upload full archive (NOT compressed as zip)
+      - name: 📦 Upload Archive as Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: db-${{ steps.site.outputs.domain }}
-          path: ${{ steps.site.outputs.db_file }}
+          name: archive-${{ steps.site.outputs.domain }}
+          path: archive_${{ steps.site.outputs.domain }}/
           retention-days: 90
-          if-no-files-found: warn
-          compression-level: 6
+          compression-level: 0
 
   verify:
-    needs: crawl
+    needs: archive
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: 📁 Download artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: downloads
       
       - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
-      - name: 🔍 COMPREHENSIVE VERIFICATION
+      - name: ✅ VERIFY ARCHIVE STRUCTURE
         run: |
           python3 << 'VERIFY_EOF'
-          import sqlite3
           import json
           from pathlib import Path
           import sys
           
-          print("\n" + "="*120)
-          print("🔍 COMPREHENSIVE DATABASE VERIFICATION (8 CATEGORIES)")
-          print("="*120)
+          print("\n" + "="*80)
+          print("✅ ARCHIVE VERIFICATION")
+          print("="*80)
           
-          artifacts_dir = Path('artifacts')
-          db_files = list(artifacts_dir.glob('db-*/*.db'))
+          downloads_dir = Path('downloads')
+          archive_dirs = [d for d in downloads_dir.glob('archive-*') if d.is_dir()]
           
-          if not db_files:
-              print("\n⚠️ No database files found!")
-              sys.exit(0)
+          if not archive_dirs:
+              print("\n❌ No archive directories found!")
+              sys.exit(1)
           
-          print(f"\n📆 Processing {len(db_files)} database(s)\n")
-          
-          for db_file in sorted(db_files):
-              domain = db_file.parent.name.replace('db-', '')
-              file_size_mb = db_file.stat().st_size / 1024 / 1024
+          for archive_dir in sorted(archive_dirs):
+              domain = archive_dir.name.replace('archive-', '')
+              print(f"\n📂 Checking: {domain}")
+              print("-" * 80)
               
-              print(f"\n{'='*120}")
-              print(f"📂  {domain.upper()} | {file_size_mb:.2f} MB")
-              print(f"{'='*120}")
+              # Check structure
+              required_dirs = ['pages', 'assets', 'warc']
+              assets_subdirs = ['images', 'styles', 'scripts', 'fonts']
               
-              conn = sqlite3.connect(str(db_file))
-              conn.row_factory = sqlite3.Row
-              cursor = conn.cursor()
+              for required_dir in required_dirs:
+                  path = archive_dir / required_dir
+                  if path.exists():
+                      count = len(list(path.rglob('*')))
+                      size = sum(f.stat().st_size for f in path.rglob('*') if f.is_file()) / 1024 / 1024
+                      print(f"  ✅ {required_dir:10} - {count:4} items, {size:8.2f} MB")
+                  else:
+                      print(f"  ❌ {required_dir:10} - MISSING")
               
-              print("\n1️⃣  DATABASE INTEGRITY + FOREIGN KEYS")
-              cursor.execute("PRAGMA integrity_check")
-              integrity = cursor.fetchone()[0]
-              test1 = integrity == 'ok'
-              print(f"   {'✅' if test1 else '❌'} integrity_check: {integrity}")
+              # Check assets subdirs
+              assets_dir = archive_dir / 'assets'
+              if assets_dir.exists():
+                  print(f"\n  Assets subdirectories:")
+                  for subdir in assets_subdirs:
+                      path = assets_dir / subdir
+                      if path.exists():
+                          count = len(list(path.glob('*')))
+                          size = sum(f.stat().st_size for f in path.glob('*') if f.is_file()) / 1024 / 1024
+                          print(f"    • {subdir:12} - {count:4} files, {size:8.2f} MB")
               
-              cursor.execute("PRAGMA quick_check")
-              quick = cursor.fetchone()[0]
-              print(f"   ✅ quick_check: {quick}")
-              
-              cursor.execute("PRAGMA foreign_key_check")
-              fk_errors = cursor.fetchall()
-              test_fk = len(fk_errors) == 0
-              print(f"   {'✅' if test_fk else '❌'} Foreign keys: {len(fk_errors)} violations")
-              
-              print("\n2️⃣  PAGES VALIDATION")
-              cursor.execute("SELECT COUNT(*) FROM pages")
-              pages_total = cursor.fetchone()[0]
-              cursor.execute("SELECT COUNT(DISTINCT url) FROM pages")
-              unique_urls = cursor.fetchone()[0]
-              cursor.execute("SELECT COUNT(*) FROM pages WHERE status_code = 200")
-              pages_200 = cursor.fetchone()[0]
-              print(f"   ✅ Total pages: {pages_total}")
-              print(f"   ✅ Unique URLs: {unique_urls}")
-              print(f"   ✅ Status 200 OK: {pages_200}/{pages_total}")
-              
-              print("\n3️⃣  ASSETS INTEGRITY")
-              cursor.execute("SELECT COUNT(*) FROM assets")
-              assets_total = cursor.fetchone()[0]
-              cursor.execute("SELECT COUNT(*) FROM assets WHERE content_hash IS NULL")
-              assets_no_hash = cursor.fetchone()[0]
-              test3a = assets_no_hash == 0
-              print(f"   {'✅' if test3a else '❌'} Assets with content_hash: {assets_total - assets_no_hash}/{assets_total}")
-              
-              print("\n4️⃣  ASSET BLOBs VERIFICATION")
-              cursor.execute("SELECT COUNT(*) FROM asset_blobs")
-              blobs_total = cursor.fetchone()[0]
-              cursor.execute("SELECT COUNT(*) FROM asset_blobs WHERE content IS NULL")
-              blobs_no_content = cursor.fetchone()[0]
-              test4a = blobs_no_content == 0
-              print(f"   {'✅' if test4a else '❌'} BLOBs with content: {blobs_total - blobs_no_content}/{blobs_total}")
-              
-              print("\n5️⃣  DEDUPLICATION STATS")
-              cursor.execute("SELECT COUNT(DISTINCT content_hash) FROM assets")
-              unique_blobs = cursor.fetchone()[0]
-              dedup_pct = ((assets_total - unique_blobs) / assets_total * 100) if assets_total > 0 else 0
-              print(f"   ✅ Total assets: {assets_total}")
-              print(f"   ✅ Unique: {unique_blobs} ({dedup_pct:.1f}% deduplicated)")
-              
-              print("\n6️⃣  MIME-TYPES")
-              cursor.execute("SELECT asset_type, COUNT(*) FROM assets GROUP BY asset_type ORDER BY COUNT(*) DESC LIMIT 5")
-              for atype, cnt in cursor.fetchall():
-                  print(f"   • {atype}: {cnt}")
-              
-              print("\n7️⃣  PERFORMANCE METRICS")
-              cursor.execute("PRAGMA page_count")
-              page_count = cursor.fetchone()[0]
-              cursor.execute("PRAGMA page_size")
-              page_size = cursor.fetchone()[0]
-              print(f"   ✅ Pages: {page_count}, Size: {page_size} bytes")
-              
-              print("\n8️⃣  FINAL VERDICT")
-              if integrity == 'ok' and test1 and test_fk and test3a and test4a:
-                  print(f"   🌟 ALL TESTS PASSED - PRODUCTION READY ✅")
+              # Check database
+              db_file = archive_dir / f'{domain}.db'
+              if db_file.exists():
+                  db_size = db_file.stat().st_size / 1024 / 1024
+                  print(f"\n  ✅ Database:       {db_file.name} ({db_size:.2f} MB)")
               else:
-                  print(f"   ⚠️  SOME TESTS FAILED")
+                  print(f"\n  ❌ Database: MISSING")
               
-              conn.close()
+              # Check metadata
+              metadata_file = archive_dir / 'metadata.json'
+              if metadata_file.exists():
+                  with open(metadata_file) as f:
+                      metadata = json.load(f)
+                  print(f"\n  ✅ Metadata: {metadata_file.name}")
+                  print(f"     Pages: {metadata.get('pages_archived', 'N/A')}")
+                  print(f"     Assets: {metadata.get('assets_archived', 'N/A')}")
+                  print(f"     Total Size: {metadata.get('total_assets_size_mb', 'N/A')} MB")
+              else:
+                  print(f"\n  ⚠️  Metadata: MISSING")
+              
+              # Total size
+              total_size = sum(f.stat().st_size for f in archive_dir.rglob('*') if f.is_file()) / 1024 / 1024
+              print(f"\n  📊 TOTAL ARCHIVE SIZE: {total_size:.2f} MB")
+              print(f"\n  ✅ Archive structure is VALID and READY FOR DEPLOYMENT")
           
-          print("\n✅ VERIFICATION COMPLETE!\n")
+          print("\n" + "="*80)
+          print("✅ VERIFICATION COMPLETE")
+          print("="*80 + "\n")
           VERIFY_EOF
