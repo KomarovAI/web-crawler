@@ -1,15 +1,24 @@
-import hashlib
+#!/usr/bin/env python3
+"""
+Asset Extractor - Extract and download assets from HTML
+Deduplicated storage with content hashing
+"""
+
 import asyncio
-from urllib.parse import urljoin, urlparse
-from bs4 import BeautifulSoup
 import aiohttp
+import hashlib
+import sqlite3
+from urllib.parse import urljoin, urlparse
+from pathlib import Path
 import logging
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 class AssetExtractor:
-    """Извлечение и скачивание ассетов из HTML"""
+    """Extract and download assets with deduplication"""
     
+    # MIME types for different asset types
     MIME_TYPES = {
         '.css': 'text/css',
         '.js': 'application/javascript',
@@ -25,193 +34,183 @@ class AssetExtractor:
         '.woff2': 'font/woff2',
     }
     
-    def __init__(self, conn):
-        self.conn = conn
+    def __init__(self, db_conn: sqlite3.Connection):
+        self.conn = db_conn
+        self.downloaded_hashes = set()
+        self._load_existing_hashes()
+    
+    def _load_existing_hashes(self):
+        """Load already downloaded asset hashes"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT content_hash FROM asset_blobs')
+            self.downloaded_hashes = {row[0] for row in cursor.fetchall()}
+        except:
+            pass
     
     def guess_mime_type(self, url: str) -> str:
-        """Определить MIME тип по URL"""
+        """Determine MIME type from URL"""
         url_lower = url.lower()
         for ext, mime in self.MIME_TYPES.items():
             if url_lower.endswith(ext):
                 return mime
         return 'application/octet-stream'
     
-    def _generate_asset_path(self, url: str) -> str:
-        """Генерировать путь ассета для БД"""
-        parsed = urlparse(url)
-        path = parsed.path or '/index.html'
-        if parsed.query:
-            path += f"?{parsed.query}"
-        return path
-    
-    def extract_assets(self, html: str, base_url: str) -> list:
-        """Найти все ассеты в HTML"""
+    def extract_assets(self, html: str, page_url: str) -> list:
+        """Extract asset URLs from HTML"""
         try:
+            soup = BeautifulSoup(html, 'lxml')
+        except:
             soup = BeautifulSoup(html, 'html.parser')
-        except Exception as e:
-            logger.error(f"Error parsing HTML: {e}")
-            return []
         
         assets = []
+        seen = set()
         
-        # 1. Images
-        for img in soup.find_all('img'):
-            src = img.get('src') or img.get('data-src')
-            if src and src.strip() and not src.startswith('data:'):
-                url = urljoin(base_url, src)
-                assets.append({
-                    'url': url,
-                    'type': 'image',
-                    'mime': self.guess_mime_type(src),
-                    'element': 'img'
-                })
-        
-        # 2. CSS
-        for link in soup.find_all('link', rel='stylesheet'):
-            href = link.get('href')
-            if href and href.strip():
-                url = urljoin(base_url, href)
-                assets.append({
-                    'url': url,
-                    'type': 'css',
-                    'mime': 'text/css',
-                    'element': 'link'
-                })
-        
-        # 3. Scripts
-        for script in soup.find_all('script'):
-            src = script.get('src')
-            if src and src.strip():
-                url = urljoin(base_url, src)
-                assets.append({
-                    'url': url,
-                    'type': 'js',
-                    'mime': 'application/javascript',
-                    'element': 'script'
-                })
-        
-        # 4. Favicon
-        for link in soup.find_all('link', rel=['icon', 'shortcut icon']):
-            href = link.get('href')
-            if href and href.strip():
-                url = urljoin(base_url, href)
-                assets.append({
-                    'url': url,
-                    'type': 'favicon',
-                    'mime': self.guess_mime_type(href),
-                    'element': 'link'
-                })
-        
-        # 5. Meta images (OG, Twitter)
-        for meta in soup.find_all('meta'):
-            prop = meta.get('property') or meta.get('name')
-            if prop and 'image' in prop.lower():
-                content = meta.get('content')
-                if content and content.strip():
-                    url = urljoin(base_url, content)
+        # Images
+        for img in soup.find_all('img', src=True):
+            src = img['src'].strip()
+            if src and not src.startswith('data:'):
+                url = urljoin(page_url, src)
+                if url not in seen:
+                    seen.add(url)
                     assets.append({
                         'url': url,
-                        'type': 'meta-image',
-                        'mime': self.guess_mime_type(content),
-                        'element': 'meta'
+                        'type': 'image',
+                        'mime': self.guess_mime_type(url),
                     })
         
-        # Remove duplicates
-        seen = set()
-        unique_assets = []
-        for asset in assets:
-            url = asset['url']
-            if url and url not in seen:
-                seen.add(url)
-                unique_assets.append(asset)
+        # Stylesheets
+        for link in soup.find_all('link'):
+            if link.get('rel') and 'stylesheet' in link.get('rel', []):
+                href = link.get('href', '').strip()
+                if href and not href.startswith('data:'):
+                    url = urljoin(page_url, href)
+                    if url not in seen:
+                        seen.add(url)
+                        assets.append({
+                            'url': url,
+                            'type': 'css',
+                            'mime': 'text/css',
+                        })
         
-        return unique_assets
+        # Scripts
+        for script in soup.find_all('script', src=True):
+            src = script['src'].strip()
+            if src and not src.startswith('data:'):
+                url = urljoin(page_url, src)
+                if url not in seen:
+                    seen.add(url)
+                    assets.append({
+                        'url': url,
+                        'type': 'js',
+                        'mime': 'application/javascript',
+                    })
+        
+        # Favicon
+        for link in soup.find_all('link'):
+            if link.get('rel'):
+                rels = link.get('rel', [])
+                if any(r in ['icon', 'shortcut icon'] for r in rels):
+                    href = link.get('href', '').strip()
+                    if href and not href.startswith('data:'):
+                        url = urljoin(page_url, href)
+                        if url not in seen:
+                            seen.add(url)
+                            assets.append({
+                                'url': url,
+                                'type': 'image',
+                                'mime': self.guess_mime_type(url),
+                            })
+        
+        # Meta images (Open Graph, Twitter Card)
+        for meta in soup.find_all('meta'):
+            prop_or_name = meta.get('property') or meta.get('name')
+            if prop_or_name and any(x in prop_or_name.lower() for x in ['og:image', 'twitter:image']):
+                content = meta.get('content', '').strip()
+                if content and not content.startswith('data:'):
+                    url = urljoin(page_url, content)
+                    if url not in seen:
+                        seen.add(url)
+                        assets.append({
+                            'url': url,
+                            'type': 'image',
+                            'mime': self.guess_mime_type(url),
+                        })
+        
+        return assets
     
-    async def download_asset(self, session, url: str, timeout: int = 10) -> bytes:
-        """Скачать один ассет"""
+    async def download_and_save_asset(self, asset: dict, domain: str, session) -> dict:
+        """Download asset and save to database (sync wrapper)"""
+        result = {'downloaded': 0, 'failed': 0, 'skipped': 0}
+        
+        url = asset.get('url', '').strip()
+        asset_type = asset.get('type', 'unknown')
+        mime_type = asset.get('mime', 'application/octet-stream')
+        
+        if not url:
+            result['failed'] += 1
+            return result
+        
         try:
-            async with session.get(url, timeout=timeout, ssl=True) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                else:
-                    logger.warning(f"HTTP {resp.status} for {url}")
+            # Download
+            async with session.get(url, ssl=True, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as response:
+                if response.status != 200:
+                    result['failed'] += 1
+                    return result
+                
+                # Read content
+                content = await response.read()
+                
+                if not content or len(content) == 0:
+                    result['failed'] += 1
+                    return result
+                
+                # Calculate hash
+                content_hash = hashlib.sha256(content).hexdigest()
+                
+                # Check if already downloaded
+                if content_hash in self.downloaded_hashes:
+                    result['skipped'] += 1
+                    return result
+                
+                # Parse URL for path
+                parsed = urlparse(url)
+                path = parsed.path or '/'
+                
+                # Save to database
+                try:
+                    cursor = self.conn.cursor()
+                    
+                    # Save blob (deduplicated)
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO asset_blobs (content_hash, content)
+                        VALUES (?, ?)
+                    ''', (content_hash, content))
+                    
+                    # Save asset reference
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO assets 
+                        (url, domain, path, asset_type, content_hash, file_size, mime_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (url, domain, path, asset_type, content_hash, len(content), mime_type))
+                    
+                    self.conn.commit()
+                    self.downloaded_hashes.add(content_hash)
+                    result['downloaded'] += 1
+                    logger.debug(f"Saved asset: {url} ({len(content)} bytes)")
+                    
+                except sqlite3.IntegrityError as e:
+                    # Already exists (unique constraint)
+                    result['skipped'] += 1
+                except Exception as e:
+                    logger.error(f"DB error saving {url}: {e}")
+                    result['failed'] += 1
+                
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout downloading {url}")
+            logger.debug(f"Timeout: {url}")
+            result['failed'] += 1
         except Exception as e:
-            logger.warning(f"Failed to download {url}: {type(e).__name__}: {e}")
-        return None
-    
-    async def asset_exists(self, url: str) -> bool:
-        """Проверить существует ли ассет в БД"""
-        try:
-            cursor = self.conn.execute(
-                'SELECT id FROM assets WHERE url = ? LIMIT 1',
-                (url,)
-            )
-            return cursor.fetchone() is not None
-        except Exception:
-            return False
-    
-    async def save_asset(self, url: str, content: bytes, domain: str, 
-                        asset_type: str, mime: str) -> bool:
-        """Сохранить ассет в БД"""
-        if not content:
-            return False
+            logger.debug(f"Error downloading {url}: {type(e).__name__}: {e}")
+            result['failed'] += 1
         
-        try:
-            content_hash = hashlib.sha256(content).hexdigest()
-            asset_path = self._generate_asset_path(url)
-            
-            # INSERT OR IGNORE INTO asset_blobs
-            self.conn.execute('''
-                INSERT OR IGNORE INTO asset_blobs 
-                (content_hash, content)
-                VALUES (?, ?)
-            ''', (content_hash, content))
-            
-            # INSERT INTO assets
-            self.conn.execute('''
-                INSERT INTO assets 
-                (url, domain, path, asset_type, content_hash, file_size, mime_type, extracted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ''', (url, domain, asset_path, asset_type, content_hash, len(content), mime))
-            
-            self.conn.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Error saving asset {url}: {e}")
-            return False
-    
-    async def download_and_save_assets(self, assets: list, domain: str, 
-                                      session) -> dict:
-        """Скачать и сохранить все ассеты"""
-        downloaded = 0
-        failed = 0
-        skipped = 0
-        
-        for asset in assets:
-            url = asset['url']
-            
-            # Skip если уже есть
-            if await self.asset_exists(url):
-                skipped += 1
-                continue
-            
-            # Скачать
-            content = await self.download_asset(session, url)
-            if content:
-                # Сохранить
-                if await self.save_asset(url, content, domain, asset['type'], asset['mime']):
-                    downloaded += 1
-                    logger.info(f"✅ {asset['type']}: {url}")
-                else:
-                    failed += 1
-            else:
-                failed += 1
-        
-        return {
-            'downloaded': downloaded,
-            'failed': failed,
-            'skipped': skipped,
-            'total': len(assets)
-        }
+        return result
