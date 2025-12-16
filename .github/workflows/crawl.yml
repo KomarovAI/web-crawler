@@ -11,7 +11,7 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # Increased for full-site download
+    timeout-minutes: 120
     strategy:
       matrix:
         site: ${{ fromJson(github.event.inputs.sites_json) }}
@@ -20,16 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
-      # 🔥 Install httrack and wget for full-site download
-      - name: 🔥 Install download tools (httrack + wget)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq httrack wget
-          echo "httrack version:"
-          httrack --version
-          echo "wget version:"
-          wget --version
       
       # ⚡ pip cache
       - name: ⚡ Cache pip packages
@@ -77,12 +67,11 @@ jobs:
           echo "domain=${domain}" >> $GITHUB_OUTPUT
           echo "db_file=${domain}.db" >> $GITHUB_OUTPUT
       
-      # 🔧 FIXED: Use correct script name (smart_archiver_v2.py, not crawler.py)
-      - name: 🕷️ Run crawler + full-site download
+      # 🐭 Run crawler (Python async)
+      - name: 🕷️ Run crawler
         run: |
           python3 smart_archiver_v2.py "${{ matrix.site.url }}" ${{ matrix.site.max_pages }}
         timeout-minutes: 120
-        continue-on-error: true  # 🔧 Don't fail if download fails
       
       # ⚡ Cache DB
       - name: ⚡ Cache archive database
@@ -127,14 +116,14 @@ jobs:
           import sys
           
           print("\n" + "="*120)
-          print("🔍 COMPREHENSIVE DATABASE VERIFICATION (9 CATEGORIES)")
+          print("🔍 COMPREHENSIVE DATABASE VERIFICATION (8 CATEGORIES)")
           print("="*120)
           
           artifacts_dir = Path('artifacts')
           db_files = list(artifacts_dir.glob('db-*/*.db'))
           
           if not db_files:
-              print("\n⚠️ No database files found! This may be OK if website download failed.")
+              print("\n⚠️ No database files found!")
               sys.exit(0)
           
           print(f"\n📆 Processing {len(db_files)} database(s)\n")
@@ -205,24 +194,6 @@ jobs:
               for atype, cnt in cursor.fetchall():
                   print(f"   • {atype}: {cnt}")
               
-              # 🔥 Check downloaded files
-              print("\n9️⃣  FULL-SITE DOWNLOAD STATS")
-              try:
-                  cursor.execute("SELECT COUNT(*) FROM downloaded_files WHERE domain = ?")
-                  dl_files = cursor.fetchone()[0]
-                  if dl_files > 0:
-                      cursor.execute("SELECT SUM(file_size) FROM downloaded_files WHERE domain = ?")
-                      dl_size = cursor.fetchone()[0] or 0
-                      cursor.execute("SELECT file_type, COUNT(*) FROM downloaded_files WHERE domain = ? GROUP BY file_type")
-                      dl_types = dict(cursor.fetchall())
-                      print(f"   ✅ Downloaded files: {dl_files}")
-                      print(f"   ✅ Download size: {dl_size / 1024 / 1024:.2f} MB")
-                      print(f"   ✅ By type: {dl_types}")
-                  else:
-                      print(f"   ⚠️  Full-site download: Not completed (may be OK)")
-              except Exception as e:
-                  print(f"   ⚠️  Full-site download table not available: {e}")
-              
               print("\n7️⃣  PERFORMANCE METRICS")
               cursor.execute("PRAGMA page_count")
               page_count = cursor.fetchone()[0]
@@ -234,7 +205,7 @@ jobs:
               if integrity == 'ok' and test1 and test_fk and test3a and test4a:
                   print(f"   🌟 ALL TESTS PASSED - PRODUCTION READY ✅")
               else:
-                  print(f"   ⚠️  Some tests failed - check above")
+                  print(f"   ⚠️  SOME TESTS FAILED")
               
               conn.close()
           
