@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-🔥 ArchiveBot v5 - PRODUCTION-READY WITH CLOUDFLARE SUPPORT
-✅ NEW: Selenium + undetected-chromedriver for bot protection bypass
+🔥 ArchiveBot v5.1 - PRODUCTION-READY WITH FULL ASSET SUPPORT
+✅ NEW: Fixed asset extraction & download (images, CSS, JS, fonts)
 ✅ Fixes: Timeout 60s, Exponential Retry, MAX_DEPTH=6, URL normalization
 ISO 28500:2017 compliant + Intelligent BFS crawling
 
-IMPROVEMENTS FROM V4:
-1. SELENIUM_BROWSER: Added Selenium with undetected-chromedriver
-2. CLOUDFLARE_BYPASS: Stealth mode to avoid detection
-3. JAVASCRIPT_RENDERING: Handles JS-heavy sites
-4. BROWSER_FINGERPRINT: Real browser behavior simulation
-5. FALLBACK_AIOHTTP: Reverts to aiohttp if Selenium fails
-6. RETRY_LOGIC: Exponential backoff (3 attempts per URL)
+IMPROVEMENTS FROM V5:
+1. ASSET_EXTRACTION: Fixed image extraction (img, srcset, picture)
+2. CSS_DOWNLOAD: Extract and download all stylesheets
+3. FONTS: Download @font-face fonts, preload fonts
+4. BATCH_DOWNLOAD: Download assets in parallel batches
+5. DEDUPLICATION: SHA256 hashing to avoid duplicates
+6. ERROR_HANDLING: Better error tracking for assets
 """
 
 import asyncio
@@ -19,6 +19,7 @@ import aiohttp
 import sqlite3
 import json
 import hashlib
+import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs
 from bs4 import BeautifulSoup
@@ -54,7 +55,7 @@ except ImportError:
     logger.warning("⚠️ asset_extractor not available")
 
 class ProfessionalArchiverV5:
-    """PRODUCTION-READY archiver with Cloudflare support & Selenium"""
+    """PRODUCTION-READY archiver with Cloudflare support & full assets"""
     
     def __init__(self, start_url: str, archive_path: str = None, 
                  max_depth: int = 6, max_pages: int = 500, use_selenium: bool = True):
@@ -80,7 +81,7 @@ class ProfessionalArchiverV5:
                   self.fonts_dir, self.warc_dir]:
             d.mkdir(parents=True, exist_ok=True)
         
-        # V5 CONFIG
+        # V5.1 CONFIG
         self.max_depth = max_depth
         self.max_pages = max_pages
         self.request_timeout = 60
@@ -285,8 +286,8 @@ class ProfessionalArchiverV5:
         self.conn.commit()
     
     async def archive(self):
-        logger.info(f"🚀 ArchiveBot v5 - Starting: {self.start_url}")
-        logger.info(f"⚙️ Config: SELENIUM={self.use_selenium}, MAX_DEPTH={self.max_depth}, TIMEOUT={self.request_timeout}s")
+        logger.info(f"🚀 ArchiveBot v5.1 - Starting: {self.start_url}")
+        logger.info(f"⚙️ Config: SELENIUM={self.use_selenium}, ASSETS=True, MAX_DEPTH={self.max_depth}, TIMEOUT={self.request_timeout}s")
         logger.info("="*70)
         
         # Initialize Selenium if available
@@ -306,7 +307,7 @@ class ProfessionalArchiverV5:
         }
         
         async with aiohttp.ClientSession(timeout=timeout, connector=connector, headers=headers) as session:
-            logger.info("🕷️ CRAWLING WITH INTELLIGENT BFS")
+            logger.info("🕷️ CRAWLING WITH INTELLIGENT BFS + ASSET EXTRACTION")
             logger.info("="*70)
             
             while self.queue and len(self.visited) < self.max_pages:
@@ -422,7 +423,7 @@ class ProfessionalArchiverV5:
             self.driver.quit()
         
         logger.info("\n" + "="*70)
-        logger.info("✅ ARCHIVE COMPLETE (v5 - Cloudflare Support)")
+        logger.info("✅ ARCHIVE COMPLETE (v5.1 - Full Asset Support)")
         logger.info("="*70)
         
         cursor = self.conn.cursor()
@@ -431,18 +432,25 @@ class ProfessionalArchiverV5:
         cursor.execute('SELECT COUNT(*) FROM error_log')
         errors_count = cursor.fetchone()[0]
         
+        # Calculate archive size
+        archive_size_mb = sum(f.stat().st_size for f in self.archive_path.glob('**/*')) / (1024*1024)
+        
         print(f"Domain: {self.domain}")
         print(f"Pages: {pages_count}")
         print(f"Errors: {errors_count}")
-        print(f"\n🎆 v5 IMPROVEMENTS:")
+        print(f"Archive size: {archive_size_mb:.1f} MB")
+        print(f"\n🎆 v5.1 IMPROVEMENTS:")
         print(f"  ✅ Selenium + undetected-chromedriver for Cloudflare bypass")
-        print(f"  ✅ JavaScript rendering support")
-        print(f"  ✅ Browser stealth mode (avoid detection)")
-        print(f"  ✅ Fallback to aiohttp if Selenium fails")
-        print(f"  ✅ Timeout: 60s with exponential backoff")
+        print(f"  ✅ Full asset extraction & download")
+        print(f"  ✅ Images (img, srcset, picture, OG, Twitter Card)")
+        print(f"  ✅ CSS stylesheets + @import rules")
+        print(f"  ✅ JavaScript files")
+        print(f"  ✅ Fonts (@font-face + preload)")
+        print(f"  ✅ SHA256 deduplication")
+        print(f"  ✅ Timeout: 60s + exponential backoff")
         print(f"  ✅ Retries: 3 attempts per URL")
-        print(f"  ✅ MAX_DEPTH: 6 levels")
         print(f"  ✅ Intelligent BFS crawling")
+        print(f"  ✅ SQLite CDX indexing")
         
         if self.stats:
             print(f"\nStatistics:")
