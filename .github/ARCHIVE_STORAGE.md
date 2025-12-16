@@ -1,14 +1,20 @@
 # 📦 WHERE ARCHIVES ARE STORED
 
-**АРХИВЫ ХРАНЯТСЯ В ТРЁХ МЕСТАХ:**
+**АРХИВЫ ХРАНЯТСЯ В ОДНОМ МЕСТЕ: GitHub Actions Artifacts**
 
 ---
 
-## 1️⃣ GitHub Releases (ГЛАВНОЕ)
+## 🟢 GitHub Actions Artifacts (ГЛАВНОЕ)
 
-### Путь:
+### Путь доступа:
 ```
-https://github.com/KomarovAI/web-crawler/releases
+https://github.com/KomarovAI/web-crawler/actions
+↓
+Select workflow run
+↓
+"Artifacts" tab
+↓
+Download crawl-results
 ```
 
 ### Что там:
@@ -16,267 +22,260 @@ https://github.com/KomarovAI/web-crawler/releases
 ✅ archive.db          SQLite database (весь краул)
 ✅ archive.warc.gz     ISO 28500:2017 format
 ✅ archive.wacz        Browser-playable
-✅ CRAWL_REPORT.md     Отчёт о краулинге
-```
-
-### Как скачать:
-
-```bash
-# Via GitHub CLI
-gh release list --repo KomarovAI/web-crawler
-gh release download --repo KomarovAI/web-crawler
-
-# Via curl
-curl -L https://api.github.com/repos/KomarovAI/web-crawler/releases/latest \
-  | jq '.assets[] | .browser_download_url' \
-  | xargs -I {} curl -L {} -O
-
-# Via browser
-https://github.com/KomarovAI/web-crawler/releases/latest
+✅ CRAWL_REPORT.md     Report о крауле
 ```
 
 ### Тип хранения:
 ```
-⏱️  Постоянное (FOREVER)
+⏱️  Время жизни: 90 дней (по умолчанию, можно менять)
 📦 Размер: ~125 MB per archive
-💾 Лимит: Не ограничен
-🔐 Видимость: Public (если репо public)
-```
-
----
-
-## 2️⃣ GitHub Actions Artifacts (ВРЕМЕННОЕ)
-
-### Путь:
-```
-Settings → Actions → General → Artifact and log retention
-Дефолт: 90 дней
-```
-
-### Что там:
-```
-📊 Промежуточные файлы
-🔄 Logs from workflow
-📈 Build metrics
-```
-
-### Как получить:
-
-```bash
-# Via GitHub Actions UI
-1. Actions tab
-2. Select workflow run
-3. "Artifacts" section
-4. Download
-
-# Via GitHub CLI
-gh run list --repo KomarovAI/web-crawler
-gh run download {run-id} --repo KomarovAI/web-crawler
-```
-
-### Тип хранения:
-```
-⏱️  Временное (90 дней по умолчанию)
-📦 Размер: ~125 MB per artifact
 💾 Лимит: ~400 GB per repo
-🔐 Видимость: Private to repo
+🔒 Видимость: Private to repo (только участники видят)
 ```
 
 ---
 
-## 3️⃣ GitHub Runner Disk (РАБОЧЕЕ ПРОСТРАНСТВО)
+## 🔗 КАК СКАЧАТЬ
 
-### Путь (во время краулинга):
-```
-/home/runner/work/web-crawler/web-crawler/
-```
-
-### Структура:
-```
-📂 /home/runner/work/web-crawler/web-crawler/
-   ├── *.db              ← SQLite database (ПОКА КРАУЛИМ)
-   ├── *.warc.gz         ← WARC archive (ПОКА ЭКСПОРТИРУЕМ)
-   ├── *.wacz            ← WACZ package (ПОКА СОЗДАЁМ)
-   ├── .env              ← Configuration (временно)
-   ├── smart_archiver_v2.py
-   ├── asset_extractor.py
-   └── ...
-```
-
-### Тип хранения:
-```
-⏱️  Рабочее (во время workflow execution)
-📦 Размер: ~125 MB for database
-💾 Лимит: ~14 GB per runner
-🔐 Видимость: Only during job
-```
-
-### Что происходит:
-```
-1. Workflow starts
-   ↓
-2. Repo cloned to /home/runner/work/...
-   ↓
-3. Crawler runs (creates .db)
-   ↓
-4. Export to .warc.gz and .wacz
-   ↓
-5. Upload to GitHub Releases
-   ↓
-6. Upload artifacts (90 days)
-   ↓
-7. Runner disk cleaned up
-   ↓
-8. ARCHIVES LIVE FOREVER in Releases ✅
-```
-
----
-
-## 🗂️ ХРАНИЛИЩЕ СТРУКТУРА
-
-```
-GitHub Server (cloud.github.com)
-    ↓
-    ├── 🟢 Releases (ПОСТОЯННОЕ)
-    │   ├── archive.db (125 MB)
-    │   ├── archive.warc.gz (125 MB)
-    │   ├── archive.wacz (125 MB)
-    │   └── CRAWL_REPORT.md
-    │
-    ├── 🟡 Actions Artifacts (90 дней)
-    │   ├── Logs
-    │   ├── Metrics
-    │   └── Intermediate files
-    │
-    └── 🟠 Runner Disk (Временное)
-        └── Cleared after workflow
-```
-
----
-
-## 📊 ДАННЫЕ ПО ХРАНЕНИЮ
-
-| Место | Размер | Время жизни | Доступ | Лимит |
-|-------|--------|-------------|--------|-------|
-| **Releases** | 125 MB | FOREVER ✅ | Public | ∞ |
-| **Artifacts** | 125 MB | 90 дней | Private | 400 GB |
-| **Runner disk** | 125 MB | Few minutes | Local | 14 GB |
-
----
-
-## 🔍 КАК НАЙТИ АРХИВЫ
-
-### Вариант 1: GitHub Web UI
+### Вариант 1: GitHub Web UI (Easiest)
 
 ```
 1. https://github.com/KomarovAI/web-crawler
-2. Releases (right sidebar)
-3. Latest release
-4. Download archive.db
+2. Actions tab (верхняя панель)
+3. Select latest workflow run
+4. "Artifacts" section
+5. Click "crawl-results"
+6. Download zip
+7. Extract *.db / *.warc.gz / *.wacz
 ```
 
-### Вариант 2: GitHub API
+### Вариант 2: GitHub CLI
 
 ```bash
-# Get latest release
-curl https://api.github.com/repos/KomarovAI/web-crawler/releases/latest
+# List runs
+gh run list --repo KomarovAI/web-crawler
 
-# Get asset download URL
-curl https://api.github.com/repos/KomarovAI/web-crawler/releases/latest \
-  | jq '.assets[] | select(.name=="archive.db") | .browser_download_url'
+# Download artifacts from latest run
+gh run list --repo KomarovAI/web-crawler --limit 1 --json databaseId -q | head -1 | xargs -I {} gh run download {} --repo KomarovAI/web-crawler
 ```
 
-### Вариант 3: GitHub CLI
+### Вариант 3: GitHub API
 
 ```bash
-# List releases
-gh release list --repo KomarovAI/web-crawler
-
-# Download latest
-gh release download latest --repo KomarovAI/web-crawler
+# Get latest artifacts
+curl https://api.github.com/repos/KomarovAI/web-crawler/actions/artifacts \
+  -H "Authorization: token $GITHUB_TOKEN" | jq '.artifacts[] | {name, url: .archive_download_url}'
 ```
 
-### Вариант 4: From AI Agent
+### Вариант 4: From AI Agent (Python)
 
 ```python
 import requests
-import sqlite3
+import os
+import zipfile
+from io import BytesIO
 
-# Get latest release
+# Get latest artifacts
 response = requests.get(
-    'https://api.github.com/repos/KomarovAI/web-crawler/releases/latest'
+    'https://api.github.com/repos/KomarovAI/web-crawler/actions/artifacts',
+    headers={'Authorization': f'token {os.environ["GITHUB_TOKEN"]}'}
 )
-release = response.json()
 
-# Find archive.db
-for asset in release['assets']:
-    if asset['name'] == 'archive.db':
-        url = asset['browser_download_url']
-        
-        # Download
-        db_data = requests.get(url).content
-        
-        # Save and query
-        with open('archive.db', 'wb') as f:
-            f.write(db_data)
-        
-        # Query
-        conn = sqlite3.connect('archive.db')
-        c = conn.cursor()
-        c.execute('SELECT url, title FROM pages LIMIT 10')
-        pages = c.fetchall()
+artifacts = response.json()['artifacts']
+
+if artifacts:
+    artifact = artifacts[0]  # Latest
+    
+    # Download
+    zip_url = artifact['archive_download_url']
+    zip_data = requests.get(
+        zip_url,
+        headers={'Authorization': f'token {os.environ["GITHUB_TOKEN"]}'}
+    ).content
+    
+    # Extract
+    with zipfile.ZipFile(BytesIO(zip_data)) as z:
+        z.extractall('.')
+    
+    # Query
+    import sqlite3
+    conn = sqlite3.connect('archive.db')
+    c = conn.cursor()
+    c.execute('SELECT url, title FROM pages LIMIT 10')
+    pages = c.fetchall()
+    print(pages)
 ```
 
 ---
 
-## ⚠️ ВАЖНО: ГДЕ КРАУЛЕР РАБОТАЕТ
+## 📊 STORAGE HIERARCHY
 
 ```
-Локально?        ❌ НЕТ
-На сервере?      ❌ НЕТ
-На GitHub?       ✅ ДА (GitHub Actions runner)
-В Docker?        ✅ МОЖНО (если включить)
-
-ЗАУСК ПРОЦЕССА:
-1. Trigger workflow (manual/scheduled)
-2. GitHub Actions allocates runner
-3. Runner downloads repo
-4. Runs smart_archiver_v2.py
-5. Generates archives
-6. Uploads to Releases
-7. Runner destroyed
+GitHub Server
+    ↓
+    └─ Actions Tab
+        └─ Workflow Runs
+            └─ Artifacts (90 days)
+                ├─ crawl-results
+                │   ├─ *.db
+                │   ├─ *.warc.gz
+                │   ├─ *.wacz
+                │   └─ CRAWL_REPORT.md
+                └─ batch-summary (for batch crawls)
 ```
 
 ---
 
-## 💾 ПЕРИОДИЧНОСТЬ КРАУЛИНГА
+## 🔄 ЖИЗНЕННЫЙ ЦИКЛ АРХИВА
 
 ```
-Scheduled crawl:  Daily 2 AM UTC (configurable)
-On-demand:        Manual trigger via Actions tab
-From AI:          Trigger via GitHub API
-
-Все архивы сохраняются в Releases!
+1. Trigger workflow
+   ↓
+2. GitHub runner starts
+   ├─ /home/runner/work/web-crawler/web-crawler/ (temporary)
+   ├─ Runs smart_archiver_v2.py
+   ├─ Creates *.db / *.warc.gz / *.wacz
+   └─ (~125 MB temp storage)
+   ↓
+3. Upload to Artifacts
+   └─ actions/upload-artifact@v4
+   ↓
+4. Stored in GitHub Actions Artifacts
+   ├─ 90 days retention (default)
+   ├─ Visible in Actions tab
+   ├─ Downloadable via UI/CLI/API
+   └─ ~400 GB total limit per repo
+   ↓
+5. After 90 days
+   └─ Automatically deleted
 ```
 
 ---
 
-## 🎯 QUICK ACCESS
+## 📋 WORKFLOW CONFIGURATION
+
+### crawl-website.yml
+```yaml
+# Single site crawl
+# Saves to: Artifacts (crawl-results)
+# Retention: 90 days
+# Manual + scheduled triggers
+
+steps:
+  - run: python3 smart_archiver_v2.py ...
+  - uses: actions/upload-artifact@v4
+    with:
+      name: crawl-results
+      path: |
+        *.db
+        *.warc.gz
+        *.wacz
+        CRAWL_REPORT.md
+      retention-days: 90
+```
+
+### batch-crawl.yml
+```yaml
+# Multiple sites (parallel, max 3)
+# Each site: separate artifact
+# Saves to: Artifacts (batch-results-DOMAIN)
+# Retention: 90 days
+```
+
+---
+
+## ⚡ QUICK ACCESS
+
+### Fastest way to get latest archive:
 
 ```bash
-# Fastest way to get latest archive
-gh release download latest \
-  --repo KomarovAI/web-crawler \
-  --pattern "*.db"
+# Using GitHub CLI (simplest)
+gh run list --repo KomarovAI/web-crawler --limit 1 --json databaseId -q | head -1 | xargs -I {} gh run download {} --repo KomarovAI/web-crawler --pattern "*.db"
 
-# Or direct curl
-curl -L $(curl https://api.github.com/repos/KomarovAI/web-crawler/releases/latest \
-  | jq -r '.assets[] | select(.name=="archive.db") | .browser_download_url') \
-  -o archive.db
+# Or: GitHub web UI
+# 1. Actions tab
+# 2. Latest run
+# 3. Artifacts → crawl-results → Download
 ```
 
 ---
 
-**STATUS:** 🟢 All archives stored permanently in GitHub Releases  
-**COST:** FREE (within GitHub storage limits)  
-**RETRIEVAL:** Always available, no expiration
+## 🔍 VIEW IN GITHUB WEB
+
+```
+https://github.com/KomarovAI/web-crawler/actions
+                                         ↑ Click here
+                                         
+→ Workflows
+→ Latest run
+→ Artifacts
+→ crawl-results (ZIP)
+→ Extract & query with sqlite3
+```
+
+---
+
+## 📊 RETENTION POLICY
+
+```
+⏱️  Default: 90 days
+🔧 Can change in workflow:
+   retention-days: 7    (shorter)
+   retention-days: 365  (longer)
+   retention-days: 1    (delete immediately)
+```
+
+---
+
+## ✅ SUMMARY
+
+| Where | Size | Time | Access | Cost |
+|-------|------|------|--------|------|
+| **Artifacts** | 125 MB | 90 days | Web/CLI/API | FREE |
+| Runner disk | 125 MB | Minutes | Local only | Temp |
+| Releases | - | FOREVER | - | Old way |
+
+**→ YOU USE: Artifacts (not Releases!)**
+
+---
+
+## 🚀 FOR AI AGENTS
+
+```python
+# AI can download latest archive:
+import os
+import requests
+import zipfile
+from io import BytesIO
+import sqlite3
+
+token = os.environ['GITHUB_TOKEN']
+
+# Get latest artifacts
+resp = requests.get(
+    'https://api.github.com/repos/KomarovAI/web-crawler/actions/artifacts',
+    headers={'Authorization': f'token {token}'}
+)
+artifacts = resp.json()['artifacts']
+
+if artifacts:
+    # Download latest
+    url = artifacts[0]['archive_download_url']
+    zip_data = requests.get(url, headers={'Authorization': f'token {token}'}).content
+    
+    # Extract & query
+    with zipfile.ZipFile(BytesIO(zip_data)) as z:
+        z.extractall()
+    
+    conn = sqlite3.connect('archive.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM pages')
+    # AI analysis here
+```
+
+---
+
+**STATUS:** 🟢 All archives in GitHub Actions Artifacts  
+**RETENTION:** 90 days (configurable)  
+**ACCESS:** Web UI, CLI, API, or programmatically  
+**COST:** FREE
