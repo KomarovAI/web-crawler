@@ -6,12 +6,12 @@ on:
       sites_json:
         description: 'JSON: [{"url":"https://example.com","max_pages":50}]'
         required: true
-        default: '[{"url":"https://example.com","max_pages":50}]'
+        default: '[{"url":"https://callmedley.com","max_pages":500}]'
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       matrix:
         site: ${{ fromJson(github.event.inputs.sites_json) }}
@@ -57,10 +57,10 @@ jobs:
           echo "domain=${domain}" >> $GITHUB_OUTPUT
           echo "db_file=${domain}.db" >> $GITHUB_OUTPUT
       
-      - name: Run crawler
+      - name: 🕷️ Run crawler
         run: python crawler.py
       
-      - name: Upload artifact
+      - name: 📦 Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: db-${{ steps.site.outputs.domain }}
@@ -74,17 +74,17 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Download all artifacts
+      - name: 📥 Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
       
-      - name: Setup Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
-      - name: Check DB integrity
+      - name: ✅ Check DB integrity
         run: |
           python3 << 'PYTHON'
           import sqlite3
