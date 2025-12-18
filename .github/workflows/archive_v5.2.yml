@@ -46,18 +46,15 @@ jobs:
           URL="${{ github.event.inputs.url }}"
           REUSE_RUN_ID="${{ github.event.inputs.reuse_artifact_run_id }}"
           
-          # Check if reuse mode is enabled
           if [ -n "$REUSE_RUN_ID" ]; then
             echo "reuse_mode=true" >> $GITHUB_OUTPUT
             echo "reuse_run_id=$REUSE_RUN_ID" >> $GITHUB_OUTPUT
             echo "✅ Reuse mode: Using artifact from run #$REUSE_RUN_ID (skip crawling)"
-            # Domain can be extracted from artifact later
             echo "domain=" >> $GITHUB_OUTPUT
             echo "max_pages=" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # Normal crawl mode
           echo "reuse_mode=false" >> $GITHUB_OUTPUT
           
           if [[ ! "$URL" =~ ^https?:// ]]; then
@@ -210,15 +207,13 @@ jobs:
       - name: Extract domain from artifact
         id: extract_domain
         run: |
-          # Handle nested directory structure from download-artifact
-          # find first archive_* directory (may be nested)
           ARCHIVE_DIR=$(find . -maxdepth 2 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Error: No archive found in artifact"
             ls -la
             exit 1
           fi
-          ARCHIVE_DIR="${ARCHIVE_DIR#./}"  # Remove leading ./
+          ARCHIVE_DIR="${ARCHIVE_DIR#./}"
           echo "archive_dir=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
           echo "✅ Found archive: $ARCHIVE_DIR"
       
@@ -258,7 +253,6 @@ jobs:
       - name: Extract domain from artifact
         id: get_domain
         run: |
-          # Find the archive_* directory
           ARCHIVE_DIR=$(find archive_download -maxdepth 2 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Error: No archive found"
@@ -275,10 +269,10 @@ jobs:
         if: ${{ github.event.inputs.target_repo }}
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+          DOMAIN: ${{ steps.get_domain.outputs.domain }}
         run: |
           set -e
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
-          DOMAIN="${{ steps.get_domain.outputs.domain }}"
           ARCHIVE_PATH="${{ steps.get_domain.outputs.archive_path }}"
           
           echo "🚀 Deploy Archive to ROOT (extracting contents)"
@@ -387,7 +381,7 @@ def process_html_file(filepath, domain):
                 return match.group(0)
             new_url = rewrite_url(url, domain)
             if new_url != url:
-                quote = '\"' if '\"' in match.group(0) else "'"
+                quote = '"' if '"' in match.group(0) else "'"
                 attr_name = attr_type.split('-')[0]
                 return f'{attr_name}={quote}{new_url}{quote}'
             return match.group(0)
@@ -399,7 +393,7 @@ def process_html_file(filepath, domain):
         return True
     return False
 
-domain = "$DOMAIN"
+domain = os.environ.get('DOMAIN', 'example.com')
 total = 0
 modified = 0
 for root, dirs, files in os.walk('.'):
@@ -419,7 +413,6 @@ EOF
 Source: ${{ github.repository }}
 Run: ${{ github.run_id }}
 Time: $(date)
-Mode: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && 'REUSE' || 'CRAWL' }}
 Deployed to: ROOT (GitHub Pages direct)
 Link Rewriting: YES - All absolute URLs converted to relative paths
 Note: WARC files excluded due to GitHub 100MB limit
