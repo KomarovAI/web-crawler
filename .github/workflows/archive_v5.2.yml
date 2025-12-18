@@ -109,13 +109,14 @@ jobs:
           USE_SELENIUM: ${{ github.event.inputs.use_selenium }}
 
       - name: Upload archive artifact
-        if: always() && (steps.validate.outputs.reuse_mode == 'false' || steps.validate.outputs.reuse_mode == 'true')
+        if: always() && steps.validate.outputs.reuse_mode == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: archive-${{ github.run_id }}
           path: archive_*/
           retention-days: 90
           compression-level: 6
+          if-no-files-found: warn
 
       - name: Download artifact (for reuse mode)
         if: steps.validate.outputs.reuse_mode == 'true'
@@ -123,6 +124,23 @@ jobs:
         with:
           name: archive-${{ steps.validate.outputs.reuse_run_id }}
           path: ./archive_reuse
+          repository: KomarovAI/web-crawler
+          run-id: ${{ steps.validate.outputs.reuse_run_id }}
+        continue-on-error: true
+
+      - name: Verify artifact availability
+        if: steps.validate.outputs.reuse_mode == 'true'
+        run: |
+          if [ ! -d "./archive_reuse" ] || [ -z "$(ls -A ./archive_reuse 2>/dev/null)" ]; then
+            echo "❌ Failed to download artifact from run #${{ steps.validate.outputs.reuse_run_id }}"
+            echo "📋 Available runs with artifacts:"
+            gh run list --repo KomarovAI/web-crawler --limit 10
+            exit 1
+          fi
+          echo "✅ Artifact downloaded successfully"
+          ls -la ./archive_reuse/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare archive for deployment
         id: prep_archive
@@ -217,7 +235,7 @@ jobs:
         run: |
           echo "## 🚀 Archive & Deployment Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Mode**: $(if [ "${{ steps.validate.outputs.reuse_mode }}" = "true" ]; then echo "Reuse"; else echo "Crawl"; fi)" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode**: $(if [ "${{ steps.validate.outputs.reuse_mode }}" = "true" ]; then echo "Reuse (run #${{ steps.validate.outputs.reuse_run_id }})"; else echo "Crawl"; fi)" >> $GITHUB_STEP_SUMMARY
           
           if [ -n "${{ steps.prep_archive.outputs.domain }}" ]; then
             echo "**Domain**: ${{ steps.prep_archive.outputs.domain }}" >> $GITHUB_STEP_SUMMARY
