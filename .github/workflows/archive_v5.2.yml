@@ -312,22 +312,125 @@ jobs:
           find . -name "*.warc" -delete 2>/dev/null || true
           find . -name "*.warc.gz" -delete 2>/dev/null || true
           
+          echo "📁 Rewriting links to local paths..."
+          python3 << 'EOF'
+import os
+import re
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+
+def normalize_path(path):
+    path = unquote(path)
+    path = path.strip('/')
+    if not path or path == 'index.html':
+        return 'index.html'
+    if path.endswith('/'):
+        path = path + 'index.html'
+    elif not path.endswith('.html') and not '.' in path.split('/')[-1]:
+        path = path + '/index.html'
+    return path
+
+def should_rewrite_url(url, domain):
+    if not url or url.startswith('#') or url.startswith('javascript:') or url.startswith('mailto:') or url.startswith('tel:'):
+        return False
+    if domain in url:
+        return True
+    if url.startswith('/'):
+        return True
+    if not url.startswith('http://') and not url.startswith('https://') and not url.startswith('//'):
+        return True
+    return False
+
+def rewrite_url(url, domain):
+    if not should_rewrite_url(url, domain):
+        return url
+    
+    if f'https://{domain}' in url:
+        path = url.split(f'https://{domain}', 1)[1]
+    elif f'http://{domain}' in url:
+        path = url.split(f'http://{domain}', 1)[1]
+    else:
+        path = url
+    
+    path_only = path.split('?')[0].split('#')[0]
+    fragment = url.split('#', 1)[1] if '#' in url else ''
+    query = '?' + url.split('?', 1)[1] if '?' in url else ''
+    
+    normalized = normalize_path(path_only)
+    result = normalized
+    if query:
+        result += query
+    if fragment:
+        result += '#' + fragment
+    if result.startswith('/'):
+        result = result[1:]
+    return result
+
+def process_html_file(filepath, domain):
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    except Exception as e:
+        return False
+    
+    original_content = content
+    patterns = [
+        (r'href=["\']([^"\'>]+)["\']', 'href'),
+        (r'src=["\']([^"\'>]+)["\']', 'src'),
+        (r'action=["\']([^"\'>]+)["\']', 'action'),
+    ]
+    
+    for pattern, attr_type in patterns:
+        def replace_url(match):
+            url = match.group(1)
+            if url.startswith('data:') or url.startswith('blob:'):
+                return match.group(0)
+            new_url = rewrite_url(url, domain)
+            if new_url != url:
+                quote = '\"' if '\"' in match.group(0) else "'"
+                attr_name = attr_type.split('-')[0]
+                return f'{attr_name}={quote}{new_url}{quote}'
+            return match.group(0)
+        content = re.sub(pattern, replace_url, content, flags=re.IGNORECASE)
+    
+    if content != original_content:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return True
+    return False
+
+domain = "$DOMAIN"
+total = 0
+modified = 0
+for root, dirs, files in os.walk('.'):
+    dirs[:] = [d for d in dirs if not d.startswith('.')]
+    for file in files:
+        if file.lower().endswith('.html'):
+            filepath = os.path.join(root, file)
+            total += 1
+            if process_html_file(filepath, domain):
+                modified += 1
+
+print(f"✅ Rewrite complete: {total} HTML files, {modified} modified")
+EOF
+          
           echo "📁 Creating metadata file"
-          cat > DEPLOYMENT_INFO.txt << 'EOF'
+          cat > DEPLOYMENT_INFO.txt << 'METADATA'
 Source: ${{ github.repository }}
 Run: ${{ github.run_id }}
 Time: $(date)
 Mode: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && 'REUSE' || 'CRAWL' }}
 Deployed to: ROOT (GitHub Pages direct)
+Link Rewriting: YES - All absolute URLs converted to relative paths
 Note: WARC files excluded due to GitHub 100MB limit
-EOF
+METADATA
           
           git add -A
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: Deploy archive to ROOT - $(date +%Y-%m-%d)"
+            git commit -m "chore: Deploy archive to ROOT - $(date +%Y-%m-%d) - Links rewritten"
             git push origin HEAD:main --force 2>/dev/null || git push origin HEAD:master --force
-            echo "✅ Successfully deployed to ROOT!"
+            echo "✅ Successfully deployed to ROOT with rewritten links!"
           else
             echo "⚠️ No changes detected"
           fi
@@ -343,6 +446,8 @@ EOF
             echo "✅ **Target**: ${{ github.event.inputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**GitHub Pages URL**: https://$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f1).github.io/$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f2)/" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Link Rewriting**: ✅ All absolute URLs converted to relative paths" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Location**: ROOT (GitHub Pages)" >> $GITHUB_STEP_SUMMARY
