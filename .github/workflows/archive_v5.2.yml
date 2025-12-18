@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Start URL'
+        description: 'Start URL (must be valid http/https URL)'
         required: true
         default: 'https://callmedley.com'
       max_pages:
-        description: 'Max pages to crawl'
+        description: 'Max pages to crawl (1-5000)'
         required: true
         default: '500'
       use_selenium:
@@ -16,18 +16,79 @@ on:
         required: false
         default: 'true'
       target_repo:
-        description: 'Target repository for deployment (format: owner/repo, leave empty to skip deployment)'
+        description: 'Target repository for deployment (format: owner/repo, leave empty to skip)'
         required: false
         default: ''
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
+  validate-inputs:
+    name: Validate workflow inputs
+    runs-on: ubuntu-24.04
+    outputs:
+      domain: ${{ steps.validate.outputs.domain }}
+      max_pages: ${{ steps.validate.outputs.max_pages }}
+      target_repo: ${{ steps.validate.outputs.target_repo }}
+    steps:
+      - name: Validate and sanitize inputs
+        id: validate
+        run: |
+          # Validate URL format
+          URL="${{ github.event.inputs.url }}"
+          if [[ ! "$URL" =~ ^https?:// ]]; then
+            echo "❌ Error: URL must start with http:// or https://"
+            exit 1
+          fi
+          
+          # Extract domain safely
+          DOMAIN=$(echo "$URL" | sed -E 's|^https?://||' | sed -E 's|/.*||' | cut -d'?' -f1)
+          if [[ -z "$DOMAIN" ]]; then
+            echo "❌ Error: Invalid domain extracted from URL"
+            exit 1
+          fi
+          
+          # Validate max_pages (must be 1-5000)
+          MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]] || (( MAX_PAGES < 1 || MAX_PAGES > 5000 )); then
+            echo "❌ Error: max_pages must be a number between 1 and 5000"
+            exit 1
+          fi
+          
+          # Validate target_repo format if provided
+          TARGET_REPO="${{ github.event.inputs.target_repo }}"
+          if [ -n "$TARGET_REPO" ]; then
+            if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]]; then
+              echo "❌ Error: target_repo format invalid. Use: owner/repo"
+              exit 1
+            fi
+          fi
+          
+          # Set outputs
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
+          echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
+          
+          echo "✅ Validation passed"
+          echo "  Domain: $DOMAIN"
+          echo "  Max pages: $MAX_PAGES"
+          echo "  Target repo: ${TARGET_REPO:-'(skip deployment)'}"
+
   archive:
+    name: Archive website
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    needs: validate-inputs
+    permissions:
+      contents: read
     
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Setup Python 3.11
         uses: actions/setup-python@v4
@@ -44,12 +105,11 @@ jobs:
       - name: Create .env
         run: |
           python3 << 'PYTHON'
-          import json
           import os
           
           url = '${{ github.event.inputs.url }}'
-          max_pages = int('${{ github.event.inputs.max_pages }}')
-          domain = url.replace('https://', '').replace('http://', '').replace('/', '').split('?')[0]
+          max_pages = int('${{ needs.validate-inputs.outputs.max_pages }}')
+          domain = '${{ needs.validate-inputs.outputs.domain }}'
           
           with open('.env', 'w') as f:
               f.write(f"STARTURL={url}\n")
@@ -61,7 +121,7 @@ jobs:
           print(f"CONFIG: url={url}, max_pages={max_pages}, domain={domain}")
           PYTHON
       
-      - name: Display config
+      - name: Display configuration
         run: |
           cat .env
           source .env
@@ -122,7 +182,7 @@ jobs:
               conn.close()
           PYTHON
       
-      - name: Upload archive
+      - name: Upload archive artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -130,71 +190,116 @@ jobs:
           path: archive_*/
           retention-days: 90
           if-no-files-found: warn
+          compression-level: 6
       
-      - name: Deploy to target repository
-        if: always() && github.event.inputs.target_repo != ''
-        run: |
-          TARGET_REPO="${{ github.event.inputs.target_repo }}"
-          DOMAIN=$(cat domain.txt)
-          ARCHIVE_DIR="archive_${DOMAIN//./_}"
-          
-          # Validate target repository format
-          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]]; then
-            echo "❌ Invalid repository format. Use: owner/repo"
-            exit 1
-          fi
-          
-          # Setup git config
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Create temporary directory for target repo
-          TEMP_DIR=$(mktemp -d)
-          cd "$TEMP_DIR"
-          
-          # Clone target repository
-          echo "📦 Cloning target repository: $TARGET_REPO"
-          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${TARGET_REPO}.git" .
-          
-          # Create deployment directory with timestamp
-          DEPLOY_DIR="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
-          mkdir -p "$DEPLOY_DIR"
-          
-          # Copy archive contents
-          echo "📁 Copying archive files to $DEPLOY_DIR"
-          cp -r "$GITHUB_WORKSPACE/$ARCHIVE_DIR"/* "$DEPLOY_DIR/" || true
-          
-          # Git operations
-          git add .
-          
-          if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: Deploy archive from ${{ github.repository }} (run: ${{ github.run_id }})"
-            git push origin HEAD:main || git push origin HEAD:master
-            echo "✅ Successfully deployed to $TARGET_REPO"
-          else
-            echo "⚠️ No changes to deploy"
-          fi
-      
-      - name: Summary
+      - name: Create job summary
         if: always()
         run: |
           echo "## ✅ ArchiveBot v5.2 Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: v5.2 (WARC + robots.txt + media)" >> $GITHUB_STEP_SUMMARY
           echo "- **URL**: ${{ github.event.inputs.url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Max Pages**: ${{ github.event.inputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Max Pages**: ${{ needs.validate-inputs.outputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Selenium**: ${{ github.event.inputs.use_selenium }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Compliance**: ISO 28500:2017 + RFC 9309" >> $GITHUB_STEP_SUMMARY
-          echo "- **Features**: WARC, robots.txt, media detection" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ github.event.inputs.target_repo }}" != "" ]; then
-            echo "- **Deployment**: ${{ github.event.inputs.target_repo }} ✅" >> $GITHUB_STEP_SUMMARY
-          fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### New Features" >> $GITHUB_STEP_SUMMARY
+          echo "### Features" >> $GITHUB_STEP_SUMMARY
           echo "✅ WARC format generation" >> $GITHUB_STEP_SUMMARY
           echo "✅ robots.txt parsing" >> $GITHUB_STEP_SUMMARY
           echo "✅ Media extraction (video/audio/iframe)" >> $GITHUB_STEP_SUMMARY
           echo "✅ Crawl-Delay respect" >> $GITHUB_STEP_SUMMARY
           echo "✅ Full asset extraction" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Zero error handling" >> $GITHUB_STEP_SUMMARY
-          echo "✅ External repository deployment" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to external repository
+    runs-on: ubuntu-24.04
+    needs: [validate-inputs, archive]
+    if: needs.validate-inputs.outputs.target_repo != '' && always()
+    permissions:
+      contents: read
+    environment:
+      name: external-deployment
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+
+      - name: Download archive artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: archive-${{ github.run_id }}
+          path: ./archive_download
+
+      - name: Deploy archive to target repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ needs.validate-inputs.outputs.target_repo }}
+          DOMAIN: ${{ needs.validate-inputs.outputs.domain }}
+        run: |
+          set -e
+          
+          # Setup git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Create temporary directory
+          TEMP_DIR=$(mktemp -d)
+          cd "$TEMP_DIR"
+          
+          echo "📦 Cloning target repository: $TARGET_REPO"
+          git clone --depth 1 "https://github.com/${TARGET_REPO}.git" . 2>&1 | grep -v '^Cloning\|^Receiving\|^Resolving\|^Unpacking' || true
+          
+          # Prepare deployment
+          DEPLOY_DIR="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
+          ARCHIVE_SOURCE="$GITHUB_WORKSPACE/archive_download/archive_${DOMAIN//./_}"
+          
+          if [ ! -d "$ARCHIVE_SOURCE" ]; then
+            echo "⚠️ Archive directory not found. Checking alternative paths..."
+            ARCHIVE_SOURCE=$(find "$GITHUB_WORKSPACE/archive_download" -maxdepth 1 -type d -name "archive_*" | head -1)
+            if [ -z "$ARCHIVE_SOURCE" ]; then
+              echo "❌ No archive found for deployment"
+              exit 0
+            fi
+          fi
+          
+          echo "📁 Creating deployment directory: $DEPLOY_DIR"
+          mkdir -p "$DEPLOY_DIR"
+          cp -r "$ARCHIVE_SOURCE"/* "$DEPLOY_DIR/" 2>/dev/null || true
+          
+          # Create metadata file
+          cat > "$DEPLOY_DIR/DEPLOYMENT_METADATA.txt" << EOF
+Source Repository: ${{ github.repository }}
+Run ID: ${{ github.run_id }}
+Run Number: ${{ github.run_number }}
+Commit SHA: ${{ github.sha }}
+Deployed At: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+EOF
+          
+          # Git operations with safety checks
+          git add .
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            COMMIT_MSG="chore: Deploy archive from ${{ github.repository }} (run: ${{ github.run_id }})"
+            git commit -m "$COMMIT_MSG"
+            
+            echo "🚀 Pushing to $TARGET_REPO"
+            if git push origin HEAD:main 2>/dev/null; then
+              echo "✅ Successfully deployed to $TARGET_REPO (main)"
+            elif git push origin HEAD:master 2>/dev/null; then
+              echo "✅ Successfully deployed to $TARGET_REPO (master)"
+            else
+              echo "❌ Failed to push to any default branch"
+              exit 1
+            fi
+          else
+            echo "⚠️ No changes to deploy"
+          fi
+
+      - name: Add deployment summary
+        if: always()
+        run: |
+          echo "## 🚀 Deployment Result" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Successfully deployed to: ${{ needs.validate-inputs.outputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Deployment failed" >> $GITHUB_STEP_SUMMARY
+          fi
