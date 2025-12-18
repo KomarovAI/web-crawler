@@ -15,12 +15,16 @@ on:
         description: 'Use Selenium for Cloudflare'
         required: false
         default: 'true'
+      ignore_robots:
+        description: 'Ignore robots.txt (true = crawl everything, false = respect robots.txt)'
+        required: false
+        default: 'false'
       target_repo:
         description: 'Target repository for deployment (format: owner/repo, leave empty to skip)'
         required: false
         default: 'KomarovAI/web-crawler-pages'
       reuse_artifact_run_id:
-        description: 'Reuse artifact from previous run (leave empty to crawl now, or enter run ID like 20330295918)'
+        description: 'Reuse artifact from previous run (leave empty to crawl now, or enter run ID)'
         required: false
         default: ''
 
@@ -107,6 +111,7 @@ jobs:
           python3 smart_archiver_v4.py "$STARTURL" "$MAXPAGES"
         env:
           USE_SELENIUM: ${{ github.event.inputs.use_selenium }}
+          IGNORE_ROBOTS: ${{ github.event.inputs.ignore_robots }}
 
       - name: Upload archive artifact
         if: always() && steps.validate.outputs.reuse_mode == 'false'
@@ -241,6 +246,7 @@ jobs:
           echo "## 🚀 Archive & Deployment Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Mode**: $(if [ "${{ steps.validate.outputs.reuse_mode }}" = "true" ]; then echo "Reuse (run #${{ steps.validate.outputs.reuse_run_id }})"; else echo "Crawl"; fi)" >> $GITHUB_STEP_SUMMARY
+          echo "**robots.txt**: $(if [ "${{ github.event.inputs.ignore_robots }}" = "true" ]; then echo "⛔ IGNORED"; else echo "✅ Respected"; fi)" >> $GITHUB_STEP_SUMMARY
           
           if [ -n "${{ steps.prep_archive.outputs.domain }}" ]; then
             echo "**Domain**: ${{ steps.prep_archive.outputs.domain }}" >> $GITHUB_STEP_SUMMARY
