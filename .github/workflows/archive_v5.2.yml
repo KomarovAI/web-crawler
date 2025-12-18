@@ -307,7 +307,7 @@ jobs:
           find . -name "*.warc.gz" -delete 2>/dev/null || true
           
           echo "📁 Rewriting links to local paths..."
-          python3 << 'EOF'
+          python3 << 'PYEOF'
 import os
 import re
 from pathlib import Path
@@ -406,7 +406,7 @@ for root, dirs, files in os.walk('.'):
                 modified += 1
 
 print(f"✅ Rewrite complete: {total} HTML files, {modified} modified")
-EOF
+PYEOF
           
           git add -A
           
