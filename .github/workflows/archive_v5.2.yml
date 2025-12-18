@@ -19,10 +19,15 @@ on:
         description: 'Target repository for deployment (format: owner/repo, leave empty to skip)'
         required: false
         default: ''
+      reuse_artifact_run_id:
+        description: 'Reuse artifact from previous run (leave empty to crawl now, or enter run ID)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
   id-token: write
+  actions: read
 
 jobs:
   validate-inputs:
@@ -32,11 +37,29 @@ jobs:
       domain: ${{ steps.validate.outputs.domain }}
       max_pages: ${{ steps.validate.outputs.max_pages }}
       target_repo: ${{ steps.validate.outputs.target_repo }}
+      reuse_mode: ${{ steps.validate.outputs.reuse_mode }}
+      reuse_run_id: ${{ steps.validate.outputs.reuse_run_id }}
     steps:
       - name: Validate and sanitize inputs
         id: validate
         run: |
           URL="${{ github.event.inputs.url }}"
+          REUSE_RUN_ID="${{ github.event.inputs.reuse_artifact_run_id }}"
+          
+          # Check if reuse mode is enabled
+          if [ -n "$REUSE_RUN_ID" ]; then
+            echo "reuse_mode=true" >> $GITHUB_OUTPUT
+            echo "reuse_run_id=$REUSE_RUN_ID" >> $GITHUB_OUTPUT
+            echo "✅ Reuse mode: Using artifact from run #$REUSE_RUN_ID (skip crawling)"
+            # Domain can be extracted from artifact later
+            echo "domain=" >> $GITHUB_OUTPUT
+            echo "max_pages=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Normal crawl mode
+          echo "reuse_mode=false" >> $GITHUB_OUTPUT
+          
           if [[ ! "$URL" =~ ^https?:// ]]; then
             echo "❌ Error: URL must start with http:// or https://"
             exit 1
@@ -64,10 +87,11 @@ jobs:
           echo "✅ Validation passed: $DOMAIN"
 
   archive:
-    name: Archive website
+    name: Archive website (crawl mode)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     needs: validate-inputs
+    if: needs.validate-inputs.outputs.reuse_mode == 'false'
     permissions:
       contents: read
     steps:
@@ -151,15 +175,67 @@ jobs:
       - name: Create job summary
         if: always()
         run: |
-          echo "## ✅ ArchiveBot v5.2 Complete" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ ArchiveBot v5.2 Complete (Crawl Mode)" >> $GITHUB_STEP_SUMMARY
           echo "- **URL**: ${{ github.event.inputs.url }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Max Pages**: ${{ needs.validate-inputs.outputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
+
+  reuse-artifact:
+    name: Reuse artifact from previous run
+    runs-on: ubuntu-24.04
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.reuse_mode == 'true'
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Validate run ID
+        id: validate_run
+        run: |
+          RUN_ID="${{ needs.validate-inputs.outputs.reuse_run_id }}"
+          if ! [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "❌ Error: Invalid run ID format (must be numeric)"
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "✅ Using artifact from run #$RUN_ID"
+      
+      - name: Download artifact from previous run
+        uses: actions/download-artifact@v4
+        with:
+          name: archive-${{ steps.validate_run.outputs.run_id }}
+          github-token: ${{ github.token }}
+      
+      - name: Extract domain from artifact
+        id: extract_domain
+        run: |
+          # Find archive directory and extract domain name
+          ARCHIVE_DIR=$(ls -d archive_* 2>/dev/null | head -1)
+          if [ -z "$ARCHIVE_DIR" ]; then
+            echo "❌ Error: No archive found in artifact"
+            exit 1
+          fi
+          echo "archive_dir=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
+          echo "✅ Found archive: $ARCHIVE_DIR"
+      
+      - name: Upload reused artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ github.run_id }}
+          path: ${{ steps.extract_domain.outputs.archive_dir }}/
+          retention-days: 90
+      
+      - name: Create job summary
+        run: |
+          echo "## ♻️ Reuse Mode - Previous Run Artifact" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source Run ID**: ${{ needs.validate-inputs.outputs.reuse_run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Archive**: ${{ steps.extract_domain.outputs.archive_dir }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Crawling**: ⏭️ SKIPPED" >> $GITHUB_STEP_SUMMARY
 
   deploy:
     name: Deploy to external repository
     runs-on: ubuntu-24.04
-    needs: [validate-inputs, archive]
-    if: needs.validate-inputs.outputs.target_repo != '' && always()
+    needs: [validate-inputs, archive, reuse-artifact]
+    if: always() && (needs.archive.result == 'success' || needs.reuse-artifact.result == 'success')
     permissions:
       contents: read
     environment:
@@ -174,16 +250,32 @@ jobs:
           name: archive-${{ github.run_id }}
           path: ./archive_download
 
+      - name: Extract domain from artifact
+        id: get_domain
+        run: |
+          ARCHIVE_DIR=$(ls -d archive_download/archive_* 2>/dev/null | head -1)
+          if [ -z "$ARCHIVE_DIR" ]; then
+            echo "❌ Error: No archive found"
+            exit 1
+          fi
+          DOMAIN=$(basename "$ARCHIVE_DIR" | sed 's/archive_//' | sed 's/_/./g')
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "archive_path=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
+      
       - name: Deploy (full reset)
+        if: ${{ github.event.inputs.target_repo }}
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         run: |
           set -e
-          TARGET_REPO="${{ needs.validate-inputs.outputs.target_repo }}"
-          DOMAIN="${{ needs.validate-inputs.outputs.domain }}"
+          TARGET_REPO="${{ github.event.inputs.target_repo }}"
+          DOMAIN="${{ steps.get_domain.outputs.domain }}"
+          ARCHIVE_PATH="${{ steps.get_domain.outputs.archive_path }}"
           
           echo "⚠️ WARNING: Full repository reset!"
           echo "Target: $TARGET_REPO"
+          echo "Domain: $DOMAIN"
+          echo "Source: $ARCHIVE_PATH"
           
           TEMP_DIR=$(mktemp -d)
           cd "$TEMP_DIR"
@@ -198,18 +290,18 @@ jobs:
           find . -type f ! -path './.git*' -delete
           find . -type d ! -path './.git*' -type d -empty -delete
           
-          ARCHIVE_SOURCE="$GITHUB_WORKSPACE/archive_download/archive_${DOMAIN//./_}"
-          if [ ! -d "$ARCHIVE_SOURCE" ]; then
-            echo "❌ Archive not found"
+          if [ ! -d "$GITHUB_WORKSPACE/$ARCHIVE_PATH" ]; then
+            echo "❌ Archive not found: $GITHUB_WORKSPACE/$ARCHIVE_PATH"
             exit 1
           fi
           
           echo "📁 Copying archive..."
-          cp -r "$ARCHIVE_SOURCE"/* . || true
+          cp -r "$GITHUB_WORKSPACE/$ARCHIVE_PATH"/* . || true
           
           echo "Source: ${{ github.repository }}" > DEPLOYMENT_INFO.txt
           echo "Run: ${{ github.run_id }}" >> DEPLOYMENT_INFO.txt
           echo "Time: $(date)" >> DEPLOYMENT_INFO.txt
+          echo "Mode: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && 'REUSE' || 'CRAWL' }}" >> DEPLOYMENT_INFO.txt
           
           git add .
           
@@ -224,9 +316,14 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## 🚀 Deployment" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ Success: ${{ needs.validate-inputs.outputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -z "${{ github.event.inputs.target_repo }}" ]; then
+            echo "⏭️ **Skipped**: No target_repo specified" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **Success**: ${{ github.event.inputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Failed" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Failed**" >> $GITHUB_STEP_SUMMARY
           fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode**: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && '♻️ Reuse' || '🔍 Crawl' }}" >> $GITHUB_STEP_SUMMARY
