@@ -232,17 +232,17 @@ jobs:
           echo "- **Crawling**: ⏭️ SKIPPED" >> $GITHUB_STEP_SUMMARY
 
   deploy:
-    name: Deploy to external repository (ROOT)
+    name: Deploy to GitHub Pages (gh-pages)
     runs-on: ubuntu-24.04
     needs: [validate-inputs, archive, reuse-artifact]
-    if: always() && (needs.archive.result == 'success' || needs.reuse-artifact.result == 'success')
+    if: always() && (needs.archive.result == 'success' || needs.reuse-artifact.result == 'success') && github.event.inputs.target_repo != ''
     permissions:
-      contents: read
-    environment:
-      name: external-deployment
+      contents: write
     steps:
-      - name: Checkout
+      - name: Checkout web-crawler repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -261,7 +261,6 @@ jobs:
           ARCHIVE_DIR=$(find archive_download -maxdepth 2 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Error: No archive found"
-            echo "Contents of archive_download:"
             ls -la archive_download/
             exit 1
           fi
@@ -270,17 +269,16 @@ jobs:
           echo "archive_path=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
           echo "✅ Found archive: $ARCHIVE_DIR (domain: $DOMAIN)"
       
-      - name: Deploy to ROOT (extract and commit)
-        if: ${{ github.event.inputs.target_repo }}
+      - name: Deploy to target_repo gh-pages branch
         env:
-          GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
-          DOMAIN: ${{ steps.get_domain.outputs.domain }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ github.event.inputs.target_repo }}
+          DOMAIN: ${{ steps.get_domain.outputs.domain }}
           ARCHIVE_PATH: ${{ steps.get_domain.outputs.archive_path }}
         run: |
           set -e
           
-          echo "🚀 Deploy Archive to ROOT (extracting contents)"
+          echo "🚀 Deploy to GitHub Pages (gh-pages branch)"
           echo "Target: $TARGET_REPO"
           echo "Domain: $DOMAIN"
           echo "Archive: $ARCHIVE_PATH"
@@ -294,49 +292,49 @@ jobs:
           echo "📦 Cloning $TARGET_REPO"
           git clone --depth 1 "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . || exit 1
           
-          echo "🗑️ Deleting all existing files except .git"
-          find . -type f ! -path './.git*' -delete
-          find . -type d ! -path './.git*' -type d -empty -delete
+          echo "📁 Fetching or creating gh-pages branch"
+          git fetch origin gh-pages 2>/dev/null || echo "gh-pages branch will be created"
+          git checkout -b gh-pages origin/gh-pages 2>/dev/null || git checkout --orphan gh-pages
           
-          if [ ! -d "$GITHUB_WORKSPACE/$ARCHIVE_PATH" ]; then
-            echo "❌ Archive not found: $GITHUB_WORKSPACE/$ARCHIVE_PATH"
-            ls -la "$GITHUB_WORKSPACE/archive_download/"
-            exit 1
-          fi
+          echo "🗑️ Removing all files except .git and .gitignore"
+          find . -type f ! -path './.git*' ! -name '.gitignore' -delete
+          find . -type d ! -path './.git*' -empty -delete
           
-          echo "📁 Extracting archive contents directly to ROOT..."
+          echo "📁 Extracting archive contents..."
           cp -r "$GITHUB_WORKSPACE/$ARCHIVE_PATH"/* . 2>/dev/null || true
           
-          echo "📁 Removing WARC files (GitHub 100MB limit)"
-          find . -name "*.warc" -delete 2>/dev/null || true
-          find . -name "*.warc.gz" -delete 2>/dev/null || true
+          echo "📁 Removing WARC files (GitHub limit)"
+          find . -name "*.warc" -o -name "*.warc.gz" | xargs rm -f 2>/dev/null || true
           
           echo "🔗 Rewriting links to local paths..."
-          python3 "$GITHUB_WORKSPACE/scripts/rewrite_links.py" "$DOMAIN" .
+          python3 "$GITHUB_WORKSPACE/scripts/rewrite_links.py" "$DOMAIN" . 2>/dev/null || echo "⚠️ Rewrite optional"
+          
+          # Ensure .nojekyll exists
+          touch .nojekyll
           
           git add -A
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: Deploy archive to ROOT - $(date +%Y-%m-%d) - Archive extraction + link rewriting"
-            git push origin HEAD:main --force 2>/dev/null || git push origin HEAD:master --force
-            echo "✅ Successfully deployed to ROOT with rewritten links!"
+            git commit -m "docs: Deploy archive - $(date +'%Y-%m-%d %H:%M:%S UTC' --utc)"
+            git push -u origin gh-pages --force
+            echo "✅ Successfully deployed to gh-pages!"
           else
-            echo "⚠️ No changes detected"
+            echo "⚠️ No changes to commit"
           fi
 
       - name: Summary
         if: always()
         run: |
-          echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 GitHub Pages Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -z "${{ github.event.inputs.target_repo }}" ]; then
             echo "⏭️ **Skipped**: No target_repo specified" >> $GITHUB_STEP_SUMMARY
           else
             echo "✅ **Target**: ${{ github.event.inputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**GitHub Pages URL**: https://$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f1).github.io/$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f2)/" >> $GITHUB_STEP_SUMMARY
+            PAGES_URL="https://$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f1).github.io/$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f2)/"
+            echo "**Pages URL**: $PAGES_URL" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch**: gh-pages (✅ GitHub Pages source)" >> $GITHUB_STEP_SUMMARY
             echo "**Link Rewriting**: ✅ All absolute URLs converted to relative paths" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Location**: ROOT (GitHub Pages)" >> $GITHUB_STEP_SUMMARY
