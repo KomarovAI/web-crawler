@@ -231,7 +231,7 @@ jobs:
 
       - name: Deploy archive to target repository
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
           TARGET_REPO: ${{ needs.validate-inputs.outputs.target_repo }}
           DOMAIN: ${{ needs.validate-inputs.outputs.domain }}
         run: |
