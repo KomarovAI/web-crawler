@@ -27,6 +27,10 @@ on:
         description: 'Reuse artifact from previous run (leave empty to crawl now, or enter run ID)'
         required: false
         default: ''
+      auto_deploy:
+        description: 'Auto-deploy after crawl (true/false)'
+        required: false
+        default: 'true'
 
 permissions:
   contents: read
@@ -65,6 +69,7 @@ jobs:
           URL="${{ github.event.inputs.url }}"
           REUSE_RUN_ID="${{ github.event.inputs.reuse_artifact_run_id }}"
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
+          AUTO_DEPLOY="${{ github.event.inputs.auto_deploy }}"
           
           if [ -n "$REUSE_RUN_ID" ]; then
             echo "reuse_mode=true" >> $GITHUB_OUTPUT
@@ -91,6 +96,7 @@ jobs:
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
+          echo "auto_deploy=$AUTO_DEPLOY" >> $GITHUB_OUTPUT
           echo "✅ Validation passed: $DOMAIN"
 
       - name: Run ArchiveBot v5.2 (crawl mode)
@@ -179,7 +185,11 @@ jobs:
           echo "✅ Archive ready: $ARCHIVE_DIR"
 
       - name: Deploy to GitHub Pages (gh-pages)
-        if: github.event.inputs.target_repo != '' && steps.validate.outputs.reuse_mode == 'true'
+        if: |
+          github.event.inputs.target_repo != '' && (
+            steps.validate.outputs.reuse_mode == 'true' || 
+            (steps.validate.outputs.reuse_mode == 'false' && steps.validate.outputs.auto_deploy == 'true')
+          )
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ github.event.inputs.target_repo }}
@@ -247,6 +257,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Mode**: $(if [ "${{ steps.validate.outputs.reuse_mode }}" = "true" ]; then echo "Reuse (run #${{ steps.validate.outputs.reuse_run_id }})"; else echo "Crawl"; fi)" >> $GITHUB_STEP_SUMMARY
           echo "**robots.txt**: $(if [ "${{ github.event.inputs.ignore_robots }}" = "true" ]; then echo "⛔ IGNORED"; else echo "✅ Respected"; fi)" >> $GITHUB_STEP_SUMMARY
+          echo "**Auto-Deploy**: $(if [ "${{ steps.validate.outputs.auto_deploy }}" = "true" ]; then echo "✅ Yes"; else echo "⛔ No"; fi)" >> $GITHUB_STEP_SUMMARY
           
           if [ -n "${{ steps.prep_archive.outputs.domain }}" ]; then
             echo "**Domain**: ${{ steps.prep_archive.outputs.domain }}" >> $GITHUB_STEP_SUMMARY
