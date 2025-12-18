@@ -244,6 +244,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
@@ -306,12 +311,15 @@ jobs:
           find . -name "*.warc" -delete 2>/dev/null || true
           find . -name "*.warc.gz" -delete 2>/dev/null || true
           
+          echo "🔗 Rewriting links to local paths..."
+          python3 "$GITHUB_WORKSPACE/scripts/rewrite_links.py" "$DOMAIN" .
+          
           git add -A
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: Deploy archive to ROOT - $(date +%Y-%m-%d) - Archive extraction"
+            git commit -m "chore: Deploy archive to ROOT - $(date +%Y-%m-%d) - Archive extraction + link rewriting"
             git push origin HEAD:main --force 2>/dev/null || git push origin HEAD:master --force
-            echo "✅ Successfully deployed to ROOT!"
+            echo "✅ Successfully deployed to ROOT with rewritten links!"
           else
             echo "⚠️ No changes detected"
           fi
@@ -328,7 +336,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**GitHub Pages URL**: https://$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f1).github.io/$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f2)/" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Archive Deployment**: ✅ Extracted to ROOT" >> $GITHUB_STEP_SUMMARY
+            echo "**Link Rewriting**: ✅ All absolute URLs converted to relative paths" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Location**: ROOT (GitHub Pages)" >> $GITHUB_STEP_SUMMARY
