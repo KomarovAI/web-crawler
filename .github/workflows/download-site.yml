@@ -1,0 +1,132 @@
+name: Download Site (Artifact Only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Start URL (http/https)'
+        required: true
+        default: 'https://callmedley.com'
+      max_pages:
+        description: 'Max pages to crawl (1-5000)'
+        required: true
+        default: '100'
+      use_selenium:
+        description: 'Use Selenium for Cloudflare'
+        required: false
+        default: 'true'
+      ignore_robots:
+        description: 'Ignore robots.txt'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  download-site:
+    name: Download Site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Validate inputs
+        id: validate
+        run: |
+          URL="${{ github.event.inputs.url }}"
+          MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          
+          # Validate URL
+          if [[ ! "$URL" =~ ^https?:// ]]; then
+            echo "❌ Error: URL must start with http:// or https://"
+            exit 1
+          fi
+          
+          # Validate max_pages
+          if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]] || (( MAX_PAGES < 1 || MAX_PAGES > 5000 )); then
+            echo "❌ Error: max_pages must be 1-5000"
+            exit 1
+          fi
+          
+          # Extract domain
+          DOMAIN=$(echo "$URL" | sed -E 's|^https?://||' | sed -E 's|/.*||' | cut -d'?' -f1)
+          
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "✅ Validation passed: $DOMAIN"
+      
+      - name: Download site with smart_archiver_v4.py
+        run: |
+          python3 << 'PYTHON'
+          url = '${{ github.event.inputs.url }}'
+          max_pages = '${{ github.event.inputs.max_pages }}'
+          domain = '${{ steps.validate.outputs.domain }}'
+          
+          with open('.env', 'w') as f:
+              f.write(f"STARTURL={url}\n")
+              f.write(f"MAXPAGES={max_pages}\n")
+          
+          with open('domain.txt', 'w') as f:
+              f.write(domain)
+          PYTHON
+          
+          source .env
+          python3 smart_archiver_v4.py "$STARTURL" "$MAXPAGES"
+        env:
+          USE_SELENIUM: ${{ github.event.inputs.use_selenium }}
+          IGNORE_ROBOTS: ${{ github.event.inputs.ignore_robots }}
+      
+      - name: Verify archive
+        run: |
+          ARCHIVE_DIR=$(find . -maxdepth 1 -name "archive_*" -type d | head -1)
+          if [ -z "$ARCHIVE_DIR" ]; then
+            echo "❌ Archive not found!"
+            exit 1
+          fi
+          
+          echo "✅ Archive found: $ARCHIVE_DIR"
+          echo "📊 Archive contents:"
+          du -sh "$ARCHIVE_DIR"
+          find "$ARCHIVE_DIR" -type f | head -20
+      
+      - name: Upload archive artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-archive-${{ github.run_id }}
+          path: archive_*/
+          retention-days: 90
+          compression-level: 6
+          if-no-files-found: warn
+      
+      - name: Create summary
+        if: always()
+        run: |
+          echo "## ✅ Site Download Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**URL**: ${{ github.event.inputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Max Pages**: ${{ github.event.inputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Domain**: ${{ steps.validate.outputs.domain }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Selenium**: ${{ github.event.inputs.use_selenium }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ignore robots.txt**: ${{ github.event.inputs.ignore_robots }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact Name**: site-archive-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Retention**: 90 days" >> $GITHUB_STEP_SUMMARY
