@@ -211,7 +211,7 @@ jobs:
           echo "✅ Full asset extraction" >> $GITHUB_STEP_SUMMARY
 
   deploy:
-    name: Deploy to external repository
+    name: Deploy to external repository (with full cleanup)
     runs-on: ubuntu-24.04
     needs: [validate-inputs, archive]
     if: needs.validate-inputs.outputs.target_repo != '' && always()
@@ -229,13 +229,18 @@ jobs:
           name: archive-${{ github.run_id }}
           path: ./archive_download
 
-      - name: Deploy archive to target repository
+      - name: Deploy archive to target repository (full reset)
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
           TARGET_REPO: ${{ needs.validate-inputs.outputs.target_repo }}
           DOMAIN: ${{ needs.validate-inputs.outputs.domain }}
         run: |
           set -e
+          
+          echo "⚠️ WARNING: Starting full repository reset!"
+          echo "✏️ Target: $TARGET_REPO"
+          echo "🗝️ All existing files will be DELETED"
+          sleep 2
           
           # Setup git
           git config --global user.name "github-actions[bot]"
@@ -248,8 +253,16 @@ jobs:
           echo "📦 Cloning target repository: $TARGET_REPO"
           git clone --depth 1 "https://github.com/${TARGET_REPO}.git" . 2>&1 | grep -v '^Cloning\|^Receiving\|^Resolving\|^Unpacking' || true
           
-          # Prepare deployment
-          DEPLOY_DIR="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
+          # ===== FULL CLEANUP: DELETE EVERYTHING =====
+          echo "🗝️ Removing all existing files from repository..."
+          find . -type f ! -name '.git*' -delete
+          find . -type d ! -name '.git*' -empty -delete
+          
+          # Verify cleanup
+          FILE_COUNT=$(find . -type f ! -path './.git/*' | wc -l)
+          echo "✅ Repository cleaned. Remaining files: $FILE_COUNT"
+          
+          # ===== DEPLOY NEW ARCHIVE =====
           ARCHIVE_SOURCE="$GITHUB_WORKSPACE/archive_download/archive_${DOMAIN//./_}"
           
           if [ ! -d "$ARCHIVE_SOURCE" ]; then
@@ -261,31 +274,71 @@ jobs:
             fi
           fi
           
-          echo "📁 Creating deployment directory: $DEPLOY_DIR"
-          mkdir -p "$DEPLOY_DIR"
-          cp -r "$ARCHIVE_SOURCE"/* "$DEPLOY_DIR/" 2>/dev/null || true
+          echo "📁 Copying archive files to repository root..."
+          cp -r "$ARCHIVE_SOURCE"/* . 2>/dev/null || {
+            echo "⚠️ Warning: some files could not be copied"
+          }
           
-          # Create metadata file
-          cat > "$DEPLOY_DIR/DEPLOYMENT_METADATA.txt" << EOF
+          # Create deployment metadata
+          cat > "DEPLOYMENT_METADATA.txt" << EOF
+=== DEPLOYMENT METADATA ===
 Source Repository: ${{ github.repository }}
 Run ID: ${{ github.run_id }}
 Run Number: ${{ github.run_number }}
 Commit SHA: ${{ github.sha }}
 Deployed At: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+Domain: $DOMAIN
+
+DEPLOYMENT TYPE: Full Repository Reset
+- All previous files: DELETED
+- New archive: DEPLOYED
+
+To revert this deployment, restore from git history:
+git revert <commit-sha>
+EOF
+          
+          # Create README for archive
+          cat > "README_ARCHIVE.md" << EOF
+# Website Archive - $DOMAIN
+
+**Generated**: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+**Source**: ${{ github.repository }} (Run #${{ github.run_number }})
+
+## Contents
+
+This repository contains a complete web archive of **$DOMAIN** including:
+- HTML pages (WARC format - ISO 28500:2017)
+- CSS/JavaScript assets
+- Media files (images, video, audio)
+- robots.txt parsing
+- Crawl metadata
+
+## Files
+
+- **archive_***: Website archive directory
+- **DEPLOYMENT_METADATA.txt**: Deployment information
+- **README_ARCHIVE.md**: This file
+
+## Next Deployment
+
+This repository is automatically updated on each new deployment.
+All previous content will be replaced.
+
+For version history, see git commit history.
 EOF
           
           # Git operations with safety checks
           git add .
           
           if [ -n "$(git status --porcelain)" ]; then
-            COMMIT_MSG="chore: Deploy archive from ${{ github.repository }} (run: ${{ github.run_id }})"
-            git commit -m "$COMMIT_MSG"
+            COMMIT_MSG="chore: Full deploy of $DOMAIN archive from ${{ github.repository }} (run: ${{ github.run_id }})"
+            git commit -m "$COMMIT_MSG" -m "This commit resets the repository with new archive content."
             
-            echo "🚀 Pushing to $TARGET_REPO"
-            if git push origin HEAD:main 2>/dev/null; then
-              echo "✅ Successfully deployed to $TARGET_REPO (main)"
-            elif git push origin HEAD:master 2>/dev/null; then
-              echo "✅ Successfully deployed to $TARGET_REPO (master)"
+            echo "🚀 Pushing reset repository to $TARGET_REPO"
+            if git push origin HEAD:main --force 2>/dev/null; then
+              echo "✅ Successfully deployed to $TARGET_REPO (main) - FULL RESET"
+            elif git push origin HEAD:master --force 2>/dev/null; then
+              echo "✅ Successfully deployed to $TARGET_REPO (master) - FULL RESET"
             else
               echo "❌ Failed to push to any default branch"
               exit 1
@@ -298,8 +351,14 @@ EOF
         if: always()
         run: |
           echo "## 🚀 Deployment Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ Successfully deployed to: ${{ needs.validate-inputs.outputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Successfully deployed to**: ${{ needs.validate-inputs.outputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Deployment Type: FULL RESET" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ All repository content was replaced with new archive" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**To revert**: Use git history or restore from backup" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ Deployment failed" >> $GITHUB_STEP_SUMMARY
           fi
