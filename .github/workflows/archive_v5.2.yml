@@ -409,14 +409,7 @@ print(f"✅ Rewrite complete: {total} HTML files, {modified} modified")
 EOF
           
           echo "📁 Creating metadata file"
-          cat > DEPLOYMENT_INFO.txt << 'METADATA'
-Source: ${{ github.repository }}
-Run: ${{ github.run_id }}
-Time: $(date)
-Deployed to: ROOT (GitHub Pages direct)
-Link Rewriting: YES - All absolute URLs converted to relative paths
-Note: WARC files excluded due to GitHub 100MB limit
-METADATA
+          printf 'Source: %s\nRun: %s\nTime: %s\nDeployed to: ROOT (GitHub Pages direct)\nLink Rewriting: YES - All absolute URLs converted to relative paths\nNote: WARC files excluded due to GitHub 100MB limit\n' "${{ github.repository }}" "${{ github.run_id }}" "$(date)" > DEPLOYMENT_INFO.txt
           
           git add -A
           
