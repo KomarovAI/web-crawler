@@ -308,15 +308,20 @@ jobs:
           echo "📁 Copying archive..."
           cp -r "$GITHUB_WORKSPACE/$ARCHIVE_PATH"/* . || true
           
+          echo "📁 Removing large WARC files (GitHub 100MB limit)..."
+          find . -name "*.warc" -delete
+          find . -name "*.warc.gz" -delete
+          
           echo "Source: ${{ github.repository }}" > DEPLOYMENT_INFO.txt
           echo "Run: ${{ github.run_id }}" >> DEPLOYMENT_INFO.txt
           echo "Time: $(date)" >> DEPLOYMENT_INFO.txt
           echo "Mode: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && 'REUSE' || 'CRAWL' }}" >> DEPLOYMENT_INFO.txt
+          echo "Note: WARC files excluded due to GitHub's 100MB file size limit" >> DEPLOYMENT_INFO.txt
           
           git add .
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: Deploy $DOMAIN from ${{ github.repository }} (run ${{ github.run_id }})"
+            git commit -m "chore: Deploy $DOMAIN from ${{ github.repository }} (run ${{ github.run_id }}) - WARC excluded"
             git push origin HEAD:main --force 2>/dev/null || git push origin HEAD:master --force
             echo "✅ Deployed successfully"
           else
@@ -337,3 +342,5 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Mode**: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && '♻️ Reuse' || '🔍 Crawl' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: Large WARC files (>100MB) excluded from GitHub deployment" >> $GITHUB_STEP_SUMMARY
