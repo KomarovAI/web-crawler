@@ -20,7 +20,7 @@ on:
         required: false
         default: 'KomarovAI/web-crawler-pages'
       reuse_artifact_run_id:
-        description: 'Reuse artifact from previous run (leave empty to crawl now, or enter run ID)'
+        description: 'Reuse artifact from previous run (leave empty to crawl now, or enter run ID like 20330295918)'
         required: false
         default: ''
 
@@ -133,8 +133,13 @@ jobs:
         run: |
           if [ ! -d "./archive_reuse" ] || [ -z "$(ls -A ./archive_reuse 2>/dev/null)" ]; then
             echo "❌ Failed to download artifact from run #${{ steps.validate.outputs.reuse_run_id }}"
-            echo "📋 Available runs with artifacts:"
-            gh run list --repo KomarovAI/web-crawler --limit 10
+            echo ""
+            echo "📋 Finding successful runs with artifacts..."
+            echo ""
+            gh run list --repo KomarovAI/web-crawler --status success --limit 20 | head -5
+            echo ""
+            echo "🔍 Tip: Use the run ID (number) from the first column of a successful run"
+            echo "     Example: reuse_artifact_run_id: 20330295918"
             exit 1
           fi
           echo "✅ Artifact downloaded successfully"
@@ -169,7 +174,7 @@ jobs:
           echo "✅ Archive ready: $ARCHIVE_DIR"
 
       - name: Deploy to GitHub Pages (gh-pages)
-        if: github.event.inputs.target_repo != ''
+        if: github.event.inputs.target_repo != '' && steps.validate.outputs.reuse_mode == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ github.event.inputs.target_repo }}
