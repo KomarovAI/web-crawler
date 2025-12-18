@@ -130,19 +130,3 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Artifact Name**: site-archive-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "**Retention**: 90 days" >> $GITHUB_STEP_SUMMARY
-      
-      - name: Notify n8n on completion
-        if: always()
-        run: |
-          curl -X POST http://192.168.1.13:5678/webhook-test/github-workflow-complete \
-            -H "Content-Type: application/json" \
-            -d '{
-              "event": "workflow_completed",
-              "status": "${{ job.status }}",
-              "conclusion": "${{ job.conclusion }}",
-              "run_id": "${{ github.run_id }}",
-              "workflow_name": "${{ github.workflow }}",
-              "artifact_name": "site-archive-${{ github.run_id }}",
-              "repository": "${{ github.repository }}",
-              "workflow_url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }'
