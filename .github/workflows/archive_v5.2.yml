@@ -284,7 +284,7 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
           echo "📦 Cloning $TARGET_REPO"
-          git clone --depth 1 "https://github.com/${TARGET_REPO}.git" . || exit 1
+          git clone --depth 1 "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . || exit 1
           
           echo "🗑️ Deleting all files..."
           find . -type f ! -path './.git*' -delete
