@@ -258,7 +258,7 @@ jobs:
       - name: Extract domain from artifact
         id: get_domain
         run: |
-          # Handle nested directory structure from download-artifact
+          # Find the archive_* directory
           ARCHIVE_DIR=$(find archive_download -maxdepth 2 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Error: No archive found"
@@ -271,7 +271,7 @@ jobs:
           echo "archive_path=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
           echo "✅ Found archive: $ARCHIVE_DIR (domain: $DOMAIN)"
       
-      - name: Deploy to ROOT (full reset)
+      - name: Deploy to ROOT (extract contents)
         if: ${{ github.event.inputs.target_repo }}
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
@@ -281,10 +281,10 @@ jobs:
           DOMAIN="${{ steps.get_domain.outputs.domain }}"
           ARCHIVE_PATH="${{ steps.get_domain.outputs.archive_path }}"
           
-          echo "⚠️ WARNING: Full repository reset to ROOT!"
+          echo "🚀 Deploy Archive to ROOT (extracting contents)"
           echo "Target: $TARGET_REPO"
           echo "Domain: $DOMAIN"
-          echo "Source: $ARCHIVE_PATH"
+          echo "Archive: $ARCHIVE_PATH"
           
           TEMP_DIR=$(mktemp -d)
           cd "$TEMP_DIR"
@@ -295,65 +295,54 @@ jobs:
           echo "📦 Cloning $TARGET_REPO"
           git clone --depth 1 "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . || exit 1
           
-          echo "🗑️ Deleting all files except .git..."
+          echo "🗑️ Deleting all existing files except .git"
           find . -type f ! -path './.git*' -delete
           find . -type d ! -path './.git*' -type d -empty -delete
           
           if [ ! -d "$GITHUB_WORKSPACE/$ARCHIVE_PATH" ]; then
             echo "❌ Archive not found: $GITHUB_WORKSPACE/$ARCHIVE_PATH"
+            ls -la "$GITHUB_WORKSPACE/archive_download/"
             exit 1
           fi
           
-          echo "📁 Extracting archive to ROOT..."
-          # Extract archive contents to ROOT (not in a subdirectory)
-          # If archive_path contains subdirectories like pages/, we want their contents in root
-          cd "$TEMP_DIR"
-          cp -r "$GITHUB_WORKSPACE/$ARCHIVE_PATH"/* . || true
+          echo "📁 Extracting archive contents directly to ROOT..."
+          cp -r "$GITHUB_WORKSPACE/$ARCHIVE_PATH"/* . 2>/dev/null || true
           
-          # If there's a pages/ directory, extract its contents to root instead
-          if [ -d "pages" ]; then
-            echo "📁 Found pages/ directory - extracting to root..."
-            cp -r pages/* . || true
-            rm -rf pages/
-          fi
+          echo "📁 Removing WARC files (GitHub 100MB limit)"
+          find . -name "*.warc" -delete 2>/dev/null || true
+          find . -name "*.warc.gz" -delete 2>/dev/null || true
           
-          echo "📁 Removing large WARC files (GitHub 100MB limit)..."
-          find . -name "*.warc" -delete
-          find . -name "*.warc.gz" -delete
+          echo "📁 Creating metadata file"
+          cat > DEPLOYMENT_INFO.txt << 'EOF'
+Source: ${{ github.repository }}
+Run: ${{ github.run_id }}
+Time: $(date)
+Mode: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && 'REUSE' || 'CRAWL' }}
+Deployed to: ROOT (GitHub Pages direct)
+Note: WARC files excluded due to GitHub 100MB limit
+EOF
           
-          echo "Source: ${{ github.repository }}" > DEPLOYMENT_INFO.txt
-          echo "Run: ${{ github.run_id }}" >> DEPLOYMENT_INFO.txt
-          echo "Time: $(date)" >> DEPLOYMENT_INFO.txt
-          echo "Mode: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && 'REUSE' || 'CRAWL' }}" >> DEPLOYMENT_INFO.txt
-          echo "Deployed to: ROOT (GitHub Pages)" >> DEPLOYMENT_INFO.txt
-          echo "Note: WARC files excluded due to GitHub's 100MB file size limit" >> DEPLOYMENT_INFO.txt
-          
-          git add .
+          git add -A
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: Deploy $DOMAIN from ${{ github.repository }} (run ${{ github.run_id }}) to ROOT"
+            git commit -m "chore: Deploy archive to ROOT - $(date +%Y-%m-%d)"
             git push origin HEAD:main --force 2>/dev/null || git push origin HEAD:master --force
-            echo "✅ Deployed successfully to ROOT"
+            echo "✅ Successfully deployed to ROOT!"
           else
-            echo "⚠️ No changes"
+            echo "⚠️ No changes detected"
           fi
 
       - name: Summary
         if: always()
         run: |
-          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -z "${{ github.event.inputs.target_repo }}" ]; then
             echo "⏭️ **Skipped**: No target_repo specified" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ job.status }}" == "success" ]; then
-            echo "✅ **Success**: ${{ github.event.inputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Site URL**: https://$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f1).github.io/$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f2)/" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ **Failed**" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Target**: ${{ github.event.inputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**GitHub Pages URL**: https://$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f1).github.io/$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f2)/" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Mode**: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && '♻️ Reuse' || '🔍 Crawl' }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Location**: ROOT / for GitHub Pages" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Note**: Large WARC files excluded from GitHub deployment" >> $GITHUB_STEP_SUMMARY
+          echo "**Location**: ROOT (GitHub Pages)" >> $GITHUB_STEP_SUMMARY
