@@ -408,16 +408,6 @@ for root, dirs, files in os.walk('.'):
 print(f"✅ Rewrite complete: {total} HTML files, {modified} modified")
 EOF
           
-          echo "📁 Creating metadata file"
-          {
-            echo "Source: ${{ github.repository }}"
-            echo "Run: ${{ github.run_id }}"
-            echo "Time: $(date)"
-            echo "Deployed to: ROOT (GitHub Pages direct)"
-            echo "Link Rewriting: YES - All absolute URLs converted to relative paths"
-            echo "Note: WARC files excluded due to GitHub 100MB limit"
-          } > DEPLOYMENT_INFO.txt
-          
           git add -A
           
           if [ -n "$(git status --porcelain)" ]; then
