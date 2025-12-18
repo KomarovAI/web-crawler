@@ -36,45 +36,32 @@ jobs:
       - name: Validate and sanitize inputs
         id: validate
         run: |
-          # Validate URL format
           URL="${{ github.event.inputs.url }}"
           if [[ ! "$URL" =~ ^https?:// ]]; then
             echo "❌ Error: URL must start with http:// or https://"
             exit 1
           fi
-          
-          # Extract domain safely
           DOMAIN=$(echo "$URL" | sed -E 's|^https?://||' | sed -E 's|/.*||' | cut -d'?' -f1)
           if [[ -z "$DOMAIN" ]]; then
-            echo "❌ Error: Invalid domain extracted from URL"
+            echo "❌ Error: Invalid domain"
             exit 1
           fi
-          
-          # Validate max_pages (must be 1-5000)
           MAX_PAGES="${{ github.event.inputs.max_pages }}"
           if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]] || (( MAX_PAGES < 1 || MAX_PAGES > 5000 )); then
-            echo "❌ Error: max_pages must be a number between 1 and 5000"
+            echo "❌ Error: max_pages must be 1-5000"
             exit 1
           fi
-          
-          # Validate target_repo format if provided
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
           if [ -n "$TARGET_REPO" ]; then
             if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]]; then
-              echo "❌ Error: target_repo format invalid. Use: owner/repo"
+              echo "❌ Error: Invalid target_repo format"
               exit 1
             fi
           fi
-          
-          # Set outputs
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
-          
-          echo "✅ Validation passed"
-          echo "  Domain: $DOMAIN"
-          echo "  Max pages: $MAX_PAGES"
-          echo "  Target repo: ${TARGET_REPO:-'(skip deployment)'}"
+          echo "✅ Validation passed: $DOMAIN"
 
   archive:
     name: Archive website
@@ -83,7 +70,6 @@ jobs:
     needs: validate-inputs
     permissions:
       contents: read
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -105,20 +91,15 @@ jobs:
       - name: Create .env
         run: |
           python3 << 'PYTHON'
-          import os
-          
           url = '${{ github.event.inputs.url }}'
-          max_pages = int('${{ needs.validate-inputs.outputs.max_pages }}')
+          max_pages = '${{ needs.validate-inputs.outputs.max_pages }}'
           domain = '${{ needs.validate-inputs.outputs.domain }}'
-          
           with open('.env', 'w') as f:
               f.write(f"STARTURL={url}\n")
               f.write(f"MAXPAGES={max_pages}\n")
-          
           with open('domain.txt', 'w') as f:
               f.write(domain)
-          
-          print(f"CONFIG: url={url}, max_pages={max_pages}, domain={domain}")
+          print(f"CONFIG: {url}, {max_pages}, {domain}")
           PYTHON
       
       - name: Display configuration
@@ -128,12 +109,6 @@ jobs:
           echo "Starting ArchiveBot v5.2"
           echo "URL: $STARTURL"
           echo "MAXPAGES: $MAXPAGES"
-          echo "TIMEOUT: 60s"
-          echo "RETRIES: 3 attempts with exponential backoff"
-          echo "DEPTH: 6 levels"
-          echo "WARC: YES (ISO 28500:2017)"
-          echo "ROBOTS.TXT: YES (RFC 9309)"
-          echo "MEDIA: YES (video, audio, iframe)"
       
       - name: Run ArchiveBot v5.2
         run: |
@@ -147,38 +122,20 @@ jobs:
         run: |
           python3 << 'PYTHON'
           import sqlite3
-          import json
           from pathlib import Path
-          
           domain = open('domain.txt').read().strip()
           archive_dir = f"archive_{domain.replace('.', '_')}"
           db_path = f"{archive_dir}/{domain.replace('.', '_')}.db"
-          
           if not Path(db_path).exists():
               print("No database found")
           else:
               conn = sqlite3.connect(db_path)
               cursor = conn.cursor()
-              
               cursor.execute('SELECT COUNT(*) FROM pages')
               pages = cursor.fetchone()[0]
-              
               cursor.execute('SELECT COUNT(*) FROM error_log')
               errors = cursor.fetchone()[0]
-              
-              cursor.execute('SELECT COUNT(*) FROM media')
-              media = cursor.fetchone()[0]
-              
-              cursor.execute('SELECT COUNT(*) FROM assets')
-              assets = cursor.fetchone()[0]
-              
-              print(f"Archive Report v5.2:")
-              print(f"  Pages: {pages}")
-              print(f"  Assets: {assets}")
-              print(f"  Media detected: {media}")
-              print(f"  Errors: {errors}")
-              print(f"  Status: {'✅ SUCCESS' if errors == 0 else '⚠️ WARNINGS'}")
-              
+              print(f"Archive Report: Pages={pages}, Errors={errors}")
               conn.close()
           PYTHON
       
@@ -189,29 +146,17 @@ jobs:
           name: archive-${{ github.run_id }}
           path: archive_*/
           retention-days: 90
-          if-no-files-found: warn
           compression-level: 6
       
       - name: Create job summary
         if: always()
         run: |
           echo "## ✅ ArchiveBot v5.2 Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: v5.2 (WARC + robots.txt + media)" >> $GITHUB_STEP_SUMMARY
           echo "- **URL**: ${{ github.event.inputs.url }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Max Pages**: ${{ needs.validate-inputs.outputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Selenium**: ${{ github.event.inputs.use_selenium }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Compliance**: ISO 28500:2017 + RFC 9309" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Features" >> $GITHUB_STEP_SUMMARY
-          echo "✅ WARC format generation" >> $GITHUB_STEP_SUMMARY
-          echo "✅ robots.txt parsing" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Media extraction (video/audio/iframe)" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Crawl-Delay respect" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Full asset extraction" >> $GITHUB_STEP_SUMMARY
 
   deploy:
-    name: Deploy to external repository (with full cleanup)
+    name: Deploy to external repository
     runs-on: ubuntu-24.04
     needs: [validate-inputs, archive]
     if: needs.validate-inputs.outputs.target_repo != '' && always()
@@ -220,81 +165,68 @@ jobs:
     environment:
       name: external-deployment
     steps:
-      - name: Checkout current repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download archive artifact
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: archive-${{ github.run_id }}
           path: ./archive_download
 
-      - name: Deploy archive to target repository (full reset)
+      - name: Deploy (full reset)
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
-          TARGET_REPO: ${{ needs.validate-inputs.outputs.target_repo }}
-          DOMAIN: ${{ needs.validate-inputs.outputs.domain }}
         run: |
           set -e
-          echo "⚠️ WARNING: Starting full repository reset!"
-          echo "✏️ Target: $TARGET_REPO"
-          echo "🗑️ All existing files will be DELETED"
-          sleep 2
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TARGET_REPO="${{ needs.validate-inputs.outputs.target_repo }}"
+          DOMAIN="${{ needs.validate-inputs.outputs.domain }}"
+          
+          echo "⚠️ WARNING: Full repository reset!"
+          echo "Target: $TARGET_REPO"
+          
           TEMP_DIR=$(mktemp -d)
           cd "$TEMP_DIR"
-          echo "📦 Cloning target repository: $TARGET_REPO"
-          git clone --depth 1 "https://github.com/${TARGET_REPO}.git" . 2>&1 | grep -v '^Cloning\|^Receiving\|^Resolving\|^Unpacking' || true
-          echo "🗑️ Removing all existing files from repository..."
-          find . -type f ! -name '.git*' -delete
-          find . -type d ! -name '.git*' -empty -delete
-          FILE_COUNT=$(find . -type f ! -path './.git/*' | wc -l)
-          echo "✅ Repository cleaned. Remaining files: $FILE_COUNT"
+          
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          echo "📦 Cloning $TARGET_REPO"
+          git clone --depth 1 "https://github.com/${TARGET_REPO}.git" . || exit 1
+          
+          echo "🗑️ Deleting all files..."
+          find . -type f ! -path './.git*' -delete
+          find . -type d ! -path './.git*' -type d -empty -delete
+          
           ARCHIVE_SOURCE="$GITHUB_WORKSPACE/archive_download/archive_${DOMAIN//./_}"
           if [ ! -d "$ARCHIVE_SOURCE" ]; then
-            echo "⚠️ Archive directory not found. Checking alternative paths..."
-            ARCHIVE_SOURCE=$(find "$GITHUB_WORKSPACE/archive_download" -maxdepth 1 -type d -name "archive_*" | head -1)
-            if [ -z "$ARCHIVE_SOURCE" ]; then
-              echo "❌ No archive found for deployment"
-              exit 0
-            fi
+            echo "❌ Archive not found"
+            exit 1
           fi
-          echo "📁 Copying archive files to repository root..."
-          cp -r "$ARCHIVE_SOURCE"/* . 2>/dev/null || true
-          cat > "DEPLOYMENT_METADATA.txt" << 'METADATA'
-DEPLOYMENT METADATA
-Source Repository: ${{ github.repository }}
-Run ID: ${{ github.run_id }}
-Run Number: ${{ github.run_number }}
-Commit SHA: ${{ github.sha }}
-Deployed At: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-Domain: $DOMAIN
-METADATA
+          
+          echo "📁 Copying archive..."
+          cp -r "$ARCHIVE_SOURCE"/* . || true
+          
+          echo "Source: ${{ github.repository }}" > DEPLOYMENT_INFO.txt
+          echo "Run: ${{ github.run_id }}" >> DEPLOYMENT_INFO.txt
+          echo "Time: $(date)" >> DEPLOYMENT_INFO.txt
+          
           git add .
+          
           if [ -n "$(git status --porcelain)" ]; then
-            COMMIT_MSG="chore: Full deploy of $DOMAIN archive from ${{ github.repository }} (run: ${{ github.run_id }})"
-            git commit -m "$COMMIT_MSG"
-            echo "🚀 Pushing reset repository to $TARGET_REPO"
-            if git push origin HEAD:main --force 2>/dev/null; then
-              echo "✅ Successfully deployed to $TARGET_REPO (main) - FULL RESET"
-            elif git push origin HEAD:master --force 2>/dev/null; then
-              echo "✅ Successfully deployed to $TARGET_REPO (master) - FULL RESET"
-            else
-              echo "❌ Failed to push to any default branch"
-              exit 1
-            fi
+            git commit -m "chore: Deploy $DOMAIN from ${{ github.repository }} (run ${{ github.run_id }})"
+            git push origin HEAD:main --force 2>/dev/null || git push origin HEAD:master --force
+            echo "✅ Deployed successfully"
           else
-            echo "⚠️ No changes to deploy"
+            echo "⚠️ No changes"
           fi
 
-      - name: Add deployment summary
+      - name: Summary
         if: always()
         run: |
-          echo "## 🚀 Deployment Result" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment" >> $GITHUB_STEP_SUMMARY
           if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ Successfully deployed to: ${{ needs.validate-inputs.outputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Success: ${{ needs.validate-inputs.outputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Deployment failed" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Failed" >> $GITHUB_STEP_SUMMARY
           fi
