@@ -210,12 +210,15 @@ jobs:
       - name: Extract domain from artifact
         id: extract_domain
         run: |
-          # Find archive directory and extract domain name
-          ARCHIVE_DIR=$(ls -d archive_* 2>/dev/null | head -1)
+          # Handle nested directory structure from download-artifact
+          # find first archive_* directory (may be nested)
+          ARCHIVE_DIR=$(find . -maxdepth 2 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Error: No archive found in artifact"
+            ls -la
             exit 1
           fi
+          ARCHIVE_DIR="${ARCHIVE_DIR#./}"  # Remove leading ./
           echo "archive_dir=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
           echo "✅ Found archive: $ARCHIVE_DIR"
       
@@ -255,14 +258,19 @@ jobs:
       - name: Extract domain from artifact
         id: get_domain
         run: |
-          ARCHIVE_DIR=$(ls -d archive_download/archive_* 2>/dev/null | head -1)
+          # Handle nested directory structure from download-artifact
+          # find first archive_* directory (may be nested)
+          ARCHIVE_DIR=$(find archive_download -maxdepth 2 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Error: No archive found"
+            echo "Contents of archive_download:"
+            ls -la archive_download/
             exit 1
           fi
           DOMAIN=$(basename "$ARCHIVE_DIR" | sed 's/archive_//' | sed 's/_/./g')
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           echo "archive_path=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
+          echo "✅ Found archive: $ARCHIVE_DIR (domain: $DOMAIN)"
       
       - name: Deploy (full reset)
         if: ${{ github.event.inputs.target_repo }}
