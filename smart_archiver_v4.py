@@ -2,13 +2,13 @@
 """
 🔥 ArchiveBot v5.2 - PRODUCTION-READY WITH FULL ISO 28500:2017 COMPLIANCE
 ✅ NEW: WARC format generation (ISO 28500:2017 standard)
-✅ NEW: robots.txt parsing and compliance checking
+✅ NEW: robots.txt parsing and compliance checking (OPTIONAL - can be skipped)
 ✅ NEW: Media extraction (video, audio, iframe detection)
 ✅ Fixes: Cloudflare bypass, exponential retry, full assets
 
 IMPROVEMENTS FROM V5.1:
 1. WARC_RECORDS: Generate proper WARC files with headers
-2. ROBOTS_COMPLIANCE: Parse and respect robots.txt
+2. ROBOTS_COMPLIANCE: Parse and respect robots.txt (can be disabled)
 3. MEDIA_EXTRACTION: Detect video, audio, iframes
 4. CRAWL_DELAY: Respect Crawl-Delay from robots.txt
 5. USER_AGENT: Register with robots.txt
@@ -104,14 +104,19 @@ Content-Length: {content_length}
 
 
 class RobotsChecker:
-    """Check robots.txt compliance"""
+    """Check robots.txt compliance (can be disabled)"""
     
-    def __init__(self, domain: str):
+    def __init__(self, domain: str, ignore_robots: bool = False):
         self.domain = domain
         self.robots = RobotFileParser()
         self.robots.set_url(f"https://{domain}/robots.txt")
         self.crawl_delay = 0
-        self._load_robots()
+        self.ignore_robots = ignore_robots
+        
+        if not ignore_robots:
+            self._load_robots()
+        else:
+            logger.info("🚫 IGNORING ROBOTS.TXT - CRAWLING ALL PAGES")
     
     def _load_robots(self):
         """Load robots.txt"""
@@ -125,6 +130,9 @@ class RobotsChecker:
     
     def can_fetch(self, url: str) -> bool:
         """Check if URL can be fetched"""
+        if self.ignore_robots:
+            return True  # Ignore robots.txt completely
+        
         try:
             path = urlparse(url).path
             result = self.robots.can_fetch("ArchiveBot", url)
@@ -139,11 +147,13 @@ class ProfessionalArchiverV5_2:
     """PRODUCTION-READY archiver with WARC + robots.txt + media"""
     
     def __init__(self, start_url: str, archive_path: str = None, 
-                 max_depth: int = 6, max_pages: int = 500, use_selenium: bool = True):
+                 max_depth: int = 6, max_pages: int = 500, use_selenium: bool = True,
+                 ignore_robots: bool = False):
         self.start_url = start_url
         self.domain = urlparse(start_url).netloc.lower()
         self.domain_safe = self.domain.replace('.', '_')
         self.use_selenium = use_selenium and SELENIUM_AVAILABLE
+        self.ignore_robots = ignore_robots
         
         if archive_path is None:
             archive_path = f'archive_{self.domain_safe}'
@@ -174,8 +184,8 @@ class ProfessionalArchiverV5_2:
         # WARC writer
         self.warc_writer = WARCWriter(self.warc_dir / f'{self.domain_safe}.warc')
         
-        # robots.txt checker
-        self.robots_checker = RobotsChecker(self.domain)
+        # robots.txt checker (with ignore option)
+        self.robots_checker = RobotsChecker(self.domain, ignore_robots=ignore_robots)
         
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.execute('PRAGMA journal_mode=WAL')
@@ -206,8 +216,9 @@ class ProfessionalArchiverV5_2:
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
             options.add_argument('--disable-blink-features=AutomationControlled')
-            options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
+            options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
             options.add_argument('--window-size=1920,1080')
+            options.add_argument('--blink-settings=imagesEnabled=false')
             
             prefs = {"profile.managed_default_content_settings.images": 2}
             options.add_experimental_option("prefs", prefs)
@@ -407,7 +418,7 @@ class ProfessionalArchiverV5_2:
     
     async def archive(self):
         logger.info(f"🚀 ArchiveBot v5.2 - Starting: {self.start_url}")
-        logger.info(f"⚙️ Config: SELENIUM={self.use_selenium}, WARC=True, ROBOTS=True, MEDIA=True")
+        logger.info(f"⚙️ Config: SELENIUM={self.use_selenium}, WARC=True, ROBOTS={not self.ignore_robots}, MEDIA=True")
         logger.info(f"📋 robots.txt Crawl-Delay: {self.robots_checker.crawl_delay}s")
         logger.info("="*70)
         
@@ -418,12 +429,12 @@ class ProfessionalArchiverV5_2:
         timeout = aiohttp.ClientTimeout(total=120, connect=30)
         connector = aiohttp.TCPConnector(limit_per_host=50, limit=200, ssl=False)
         headers = {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         }
         
         async with aiohttp.ClientSession(timeout=timeout, connector=connector, headers=headers) as session:
-            logger.info("🕷️ CRAWLING WITH BFS + WARC + ROBOTS.TXT COMPLIANCE")
+            logger.info("🕷️ CRAWLING WITH BFS + WARC + OPTIONAL ROBOTS.TXT COMPLIANCE")
             logger.info("="*70)
             
             while self.queue and len(self.visited) < self.max_pages:
@@ -434,7 +445,7 @@ class ProfessionalArchiverV5_2:
                 if url in self.visited or depth > self.max_depth:
                     continue
                 
-                # Check robots.txt compliance
+                # Check robots.txt compliance (can be skipped)
                 if not self.robots_checker.can_fetch(url):
                     self.stats['robots_blocked'] += 1
                     continue
@@ -442,8 +453,8 @@ class ProfessionalArchiverV5_2:
                 self.visited.add(url)
                 await self._fetch_page(session, url, depth)
                 
-                # Respect Crawl-Delay
-                if self.robots_checker.crawl_delay > 0:
+                # Respect Crawl-Delay (only if not ignoring robots)
+                if not self.ignore_robots and self.robots_checker.crawl_delay > 0:
                     await asyncio.sleep(self.robots_checker.crawl_delay)
                 
                 if len(self.visited) % 50 == 0:
@@ -586,8 +597,8 @@ class ProfessionalArchiverV5_2:
         print(f"\n🏆 v5.2 IMPROVEMENTS:")
         print(f"  ✅ Selenium + undetected-chromedriver for Cloudflare")
         print(f"  ✅ WARC format generation (ISO 28500:2017)")
-        print(f"  ✅ robots.txt parsing and compliance checking")
-        print(f"  ✅ Crawl-Delay respect")
+        print(f"  ✅ robots.txt parsing (OPTIONAL - can be disabled)")
+        print(f"  ✅ Crawl-Delay respect (OPTIONAL)")
         print(f"  ✅ Media detection (video, audio, iframe)")
         print(f"  ✅ Full asset extraction (CSS, images, fonts, JS)")
         print(f"  ✅ SHA256 deduplication")
@@ -610,8 +621,10 @@ async def main():
     url = sys.argv[1] if len(sys.argv) > 1 else 'https://callmedley.com'
     max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else 500
     use_selenium = os.getenv('USE_SELENIUM', 'true').lower() == 'true'
+    ignore_robots = os.getenv('IGNORE_ROBOTS', 'false').lower() == 'true'  # NEW FLAG
     
-    archiver = ProfessionalArchiverV5_2(url, max_depth=6, max_pages=max_pages, use_selenium=use_selenium)
+    archiver = ProfessionalArchiverV5_2(url, max_depth=6, max_pages=max_pages, 
+                                       use_selenium=use_selenium, ignore_robots=ignore_robots)
     await archiver.archive()
 
 if __name__ == '__main__':
