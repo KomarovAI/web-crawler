@@ -15,6 +15,10 @@ on:
         description: 'Use Selenium for Cloudflare'
         required: false
         default: 'true'
+      target_repo:
+        description: 'Target repository for deployment (format: owner/repo, leave empty to skip deployment)'
+        required: false
+        default: ''
 
 jobs:
   archive:
@@ -127,6 +131,50 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
       
+      - name: Deploy to target repository
+        if: always() && github.event.inputs.target_repo != ''
+        run: |
+          TARGET_REPO="${{ github.event.inputs.target_repo }}"
+          DOMAIN=$(cat domain.txt)
+          ARCHIVE_DIR="archive_${DOMAIN//./_}"
+          
+          # Validate target repository format
+          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]]; then
+            echo "❌ Invalid repository format. Use: owner/repo"
+            exit 1
+          fi
+          
+          # Setup git config
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create temporary directory for target repo
+          TEMP_DIR=$(mktemp -d)
+          cd "$TEMP_DIR"
+          
+          # Clone target repository
+          echo "📦 Cloning target repository: $TARGET_REPO"
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${TARGET_REPO}.git" .
+          
+          # Create deployment directory with timestamp
+          DEPLOY_DIR="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
+          mkdir -p "$DEPLOY_DIR"
+          
+          # Copy archive contents
+          echo "📁 Copying archive files to $DEPLOY_DIR"
+          cp -r "$GITHUB_WORKSPACE/$ARCHIVE_DIR"/* "$DEPLOY_DIR/" || true
+          
+          # Git operations
+          git add .
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "chore: Deploy archive from ${{ github.repository }} (run: ${{ github.run_id }})"
+            git push origin HEAD:main || git push origin HEAD:master
+            echo "✅ Successfully deployed to $TARGET_REPO"
+          else
+            echo "⚠️ No changes to deploy"
+          fi
+      
       - name: Summary
         if: always()
         run: |
@@ -138,6 +186,9 @@ jobs:
           echo "- **Selenium**: ${{ github.event.inputs.use_selenium }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Compliance**: ISO 28500:2017 + RFC 9309" >> $GITHUB_STEP_SUMMARY
           echo "- **Features**: WARC, robots.txt, media detection" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.target_repo }}" != "" ]; then
+            echo "- **Deployment**: ${{ github.event.inputs.target_repo }} ✅" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### New Features" >> $GITHUB_STEP_SUMMARY
           echo "✅ WARC format generation" >> $GITHUB_STEP_SUMMARY
@@ -146,3 +197,4 @@ jobs:
           echo "✅ Crawl-Delay respect" >> $GITHUB_STEP_SUMMARY
           echo "✅ Full asset extraction" >> $GITHUB_STEP_SUMMARY
           echo "✅ Zero error handling" >> $GITHUB_STEP_SUMMARY
+          echo "✅ External repository deployment" >> $GITHUB_STEP_SUMMARY
