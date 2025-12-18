@@ -203,7 +203,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: archive-${{ steps.validate_run.outputs.run_id }}
-          github-token: ${{ github.token }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.validate_run.outputs.run_id }}
       
       - name: Extract domain from artifact
         id: extract_domain
