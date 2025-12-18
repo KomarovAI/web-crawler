@@ -237,7 +237,7 @@ jobs:
           echo "- **Crawling**: ⏭️ SKIPPED" >> $GITHUB_STEP_SUMMARY
 
   deploy:
-    name: Deploy to external repository
+    name: Deploy to external repository (ROOT)
     runs-on: ubuntu-24.04
     needs: [validate-inputs, archive, reuse-artifact]
     if: always() && (needs.archive.result == 'success' || needs.reuse-artifact.result == 'success')
@@ -259,7 +259,6 @@ jobs:
         id: get_domain
         run: |
           # Handle nested directory structure from download-artifact
-          # find first archive_* directory (may be nested)
           ARCHIVE_DIR=$(find archive_download -maxdepth 2 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Error: No archive found"
@@ -272,7 +271,7 @@ jobs:
           echo "archive_path=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
           echo "✅ Found archive: $ARCHIVE_DIR (domain: $DOMAIN)"
       
-      - name: Deploy (full reset)
+      - name: Deploy to ROOT (full reset)
         if: ${{ github.event.inputs.target_repo }}
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
@@ -282,7 +281,7 @@ jobs:
           DOMAIN="${{ steps.get_domain.outputs.domain }}"
           ARCHIVE_PATH="${{ steps.get_domain.outputs.archive_path }}"
           
-          echo "⚠️ WARNING: Full repository reset!"
+          echo "⚠️ WARNING: Full repository reset to ROOT!"
           echo "Target: $TARGET_REPO"
           echo "Domain: $DOMAIN"
           echo "Source: $ARCHIVE_PATH"
@@ -296,7 +295,7 @@ jobs:
           echo "📦 Cloning $TARGET_REPO"
           git clone --depth 1 "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . || exit 1
           
-          echo "🗑️ Deleting all files..."
+          echo "🗑️ Deleting all files except .git..."
           find . -type f ! -path './.git*' -delete
           find . -type d ! -path './.git*' -type d -empty -delete
           
@@ -305,8 +304,18 @@ jobs:
             exit 1
           fi
           
-          echo "📁 Copying archive..."
+          echo "📁 Extracting archive to ROOT..."
+          # Extract archive contents to ROOT (not in a subdirectory)
+          # If archive_path contains subdirectories like pages/, we want their contents in root
+          cd "$TEMP_DIR"
           cp -r "$GITHUB_WORKSPACE/$ARCHIVE_PATH"/* . || true
+          
+          # If there's a pages/ directory, extract its contents to root instead
+          if [ -d "pages" ]; then
+            echo "📁 Found pages/ directory - extracting to root..."
+            cp -r pages/* . || true
+            rm -rf pages/
+          fi
           
           echo "📁 Removing large WARC files (GitHub 100MB limit)..."
           find . -name "*.warc" -delete
@@ -316,14 +325,15 @@ jobs:
           echo "Run: ${{ github.run_id }}" >> DEPLOYMENT_INFO.txt
           echo "Time: $(date)" >> DEPLOYMENT_INFO.txt
           echo "Mode: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && 'REUSE' || 'CRAWL' }}" >> DEPLOYMENT_INFO.txt
+          echo "Deployed to: ROOT (GitHub Pages)" >> DEPLOYMENT_INFO.txt
           echo "Note: WARC files excluded due to GitHub's 100MB file size limit" >> DEPLOYMENT_INFO.txt
           
           git add .
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: Deploy $DOMAIN from ${{ github.repository }} (run ${{ github.run_id }}) - WARC excluded"
+            git commit -m "chore: Deploy $DOMAIN from ${{ github.repository }} (run ${{ github.run_id }}) to ROOT"
             git push origin HEAD:main --force 2>/dev/null || git push origin HEAD:master --force
-            echo "✅ Deployed successfully"
+            echo "✅ Deployed successfully to ROOT"
           else
             echo "⚠️ No changes"
           fi
@@ -337,10 +347,13 @@ jobs:
             echo "⏭️ **Skipped**: No target_repo specified" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ job.status }}" == "success" ]; then
             echo "✅ **Success**: ${{ github.event.inputs.target_repo }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Site URL**: https://$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f1).github.io/$(echo ${{ github.event.inputs.target_repo }} | cut -d'/' -f2)/" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Failed**" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Mode**: ${{ needs.validate-inputs.outputs.reuse_mode == 'true' && '♻️ Reuse' || '🔍 Crawl' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Location**: ROOT / for GitHub Pages" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Note**: Large WARC files (>100MB) excluded from GitHub deployment" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: Large WARC files excluded from GitHub deployment" >> $GITHUB_STEP_SUMMARY
