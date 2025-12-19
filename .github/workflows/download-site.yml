@@ -6,22 +6,42 @@ on:
       url:
         description: 'Start URL (http/https)'
         required: true
+        type: string
         default: 'https://callmedley.com'
       max_pages:
         description: 'Max pages to crawl (1-5000)'
         required: true
+        type: string
         default: '100'
       use_selenium:
         description: 'Use Selenium for Cloudflare'
         required: false
+        type: string
         default: 'true'
       ignore_robots:
         description: 'Ignore robots.txt'
         required: false
+        type: string
         default: 'false'
+      target_repo:
+        description: 'Target repository for upload (owner/repo)'
+        required: false
+        type: string
+        default: ''
+      auto_deploy:
+        description: 'Auto deploy after download'
+        required: false
+        type: string
+        default: 'false'
+      reuse_artifact_run_id:
+        description: 'Reuse artifact from specific run ID'
+        required: false
+        type: string
+        default: ''
       resumeUrl:
         description: 'n8n webhook callback URL (for dispatchAndWait)'
         required: false
+        type: string
         default: ''
 
 permissions:
@@ -53,6 +73,24 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
+      - name: Normalize inputs
+        id: normalize
+        run: |
+          # Convert string booleans to lowercase for consistency
+          USE_SELENIUM="${{ github.event.inputs.use_selenium }}"
+          IGNORE_ROBOTS="${{ github.event.inputs.ignore_robots }}"
+          AUTO_DEPLOY="${{ github.event.inputs.auto_deploy }}"
+          
+          # Normalize boolean strings
+          USE_SELENIUM=$(echo "$USE_SELENIUM" | tr '[:upper:]' '[:lower:]')
+          IGNORE_ROBOTS=$(echo "$IGNORE_ROBOTS" | tr '[:upper:]' '[:lower:]')
+          AUTO_DEPLOY=$(echo "$AUTO_DEPLOY" | tr '[:upper:]' '[:lower:]')
+          
+          echo "use_selenium=$USE_SELENIUM" >> $GITHUB_OUTPUT
+          echo "ignore_robots=$IGNORE_ROBOTS" >> $GITHUB_OUTPUT
+          echo "auto_deploy=$AUTO_DEPLOY" >> $GITHUB_OUTPUT
+          echo "✅ Inputs normalized"
+      
       - name: Validate inputs
         id: validate
         run: |
@@ -65,9 +103,10 @@ jobs:
             exit 1
           fi
           
-          # Validate max_pages
-          if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]] || (( MAX_PAGES < 1 || MAX_PAGES > 5000 )); then
-            echo "❌ Error: max_pages must be 1-5000"
+          # Validate max_pages (convert to int)
+          MAX_PAGES_INT=${MAX_PAGES//[^0-9]/}
+          if ! [[ "$MAX_PAGES_INT" =~ ^[0-9]+$ ]] || (( MAX_PAGES_INT < 1 || MAX_PAGES_INT > 5000 )); then
+            echo "❌ Error: max_pages must be 1-5000, got: $MAX_PAGES"
             exit 1
           fi
           
@@ -75,13 +114,14 @@ jobs:
           DOMAIN=$(echo "$URL" | sed -E 's|^https?://||' | sed -E 's|/.*||' | cut -d'?' -f1)
           
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
-          echo "✅ Validation passed: $DOMAIN"
+          echo "max_pages_int=$MAX_PAGES_INT" >> $GITHUB_OUTPUT
+          echo "✅ Validation passed: $DOMAIN (max_pages: $MAX_PAGES_INT)"
       
       - name: Download site with smart_archiver_v4.py
         run: |
           python3 << 'PYTHON'
           url = '${{ github.event.inputs.url }}'
-          max_pages = '${{ github.event.inputs.max_pages }}'
+          max_pages = '${{ steps.validate.outputs.max_pages_int }}'
           domain = '${{ steps.validate.outputs.domain }}'
           
           with open('.env', 'w') as f:
@@ -90,13 +130,18 @@ jobs:
           
           with open('domain.txt', 'w') as f:
               f.write(domain)
+          
+          print(f"✅ Configuration written:")
+          print(f"   URL: {url}")
+          print(f"   Max Pages: {max_pages}")
+          print(f"   Domain: {domain}")
           PYTHON
           
           source .env
           python3 smart_archiver_v4.py "$STARTURL" "$MAXPAGES"
         env:
-          USE_SELENIUM: ${{ github.event.inputs.use_selenium }}
-          IGNORE_ROBOTS: ${{ github.event.inputs.ignore_robots }}
+          USE_SELENIUM: ${{ steps.normalize.outputs.use_selenium }}
+          IGNORE_ROBOTS: ${{ steps.normalize.outputs.ignore_robots }}
       
       - name: Verify archive
         run: |
@@ -126,34 +171,45 @@ jobs:
         run: |
           echo "## ✅ Site Download Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**URL**: ${{ github.event.inputs.url }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Max Pages**: ${{ github.event.inputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Domain**: ${{ steps.validate.outputs.domain }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Selenium**: ${{ github.event.inputs.use_selenium }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Ignore robots.txt**: ${{ github.event.inputs.ignore_robots }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | ${{ github.event.inputs.url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Max Pages** | ${{ steps.validate.outputs.max_pages_int }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Domain** | ${{ steps.validate.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Selenium** | ${{ steps.normalize.outputs.use_selenium }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ignore robots.txt** | ${{ steps.normalize.outputs.ignore_robots }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Auto Deploy** | ${{ steps.normalize.outputs.auto_deploy }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Artifact Name**: site-archive-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "**Retention**: 90 days" >> $GITHUB_STEP_SUMMARY
       
       - name: Notify n8n on completion
-        if: always() && inputs.resumeUrl != ''
+        if: always() && github.event.inputs.resumeUrl != ''
         run: |
           RESUME_URL="${{ github.event.inputs.resumeUrl }}"
           JOB_STATUS="${{ job.status }}"
           RUN_ID="${{ github.run_id }}"
+          DOMAIN="${{ steps.validate.outputs.domain }}"
           
           if [ -n "$RESUME_URL" ]; then
             echo "📡 Sending callback to n8n..."
             
+            PAYLOAD=$(cat <<EOF
+          {
+            "status": "$JOB_STATUS",
+            "conclusion": "${{ job.status }}",
+            "run_id": $RUN_ID,
+            "workflow": "download-site",
+            "domain": "$DOMAIN",
+            "max_pages": "${{ steps.validate.outputs.max_pages_int }}",
+            "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          }
+          EOF
+            )
+            
             curl -X POST "$RESUME_URL" \
               -H "Content-Type: application/json" \
-              -d "{
-                \"status\": \"$JOB_STATUS\",
-                \"conclusion\": \"${{ job.status }}\",
-                \"run_id\": $RUN_ID,
-                \"workflow\": \"download-site\",
-                \"timestamp\": \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"
-              }" \
+              -d "$PAYLOAD" \
               --retry 3 \
               --retry-delay 5 \
               --connect-timeout 10 \
