@@ -1,3 +1,8 @@
+# @description Deploys archived website to GitHub Pages gh-pages branch
+# @requires download-site.yml artifact (site-archive-RUN_ID)
+# @outputs GitHub Pages URL, n8n callback with deployment stats, clean gh-pages branch
+# @performs Full repository reset, URL rewriting, WARC cleanup, force push
+
 name: Deploy to GitHub Pages
 
 on:
@@ -58,6 +63,11 @@ jobs:
           
           if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
             echo "❌ Error: target_repo format invalid (use owner/repo)"
+            exit 1
+          fi
+          
+          if [[ -z "$ARTIFACT_NAME" ]]; then
+            echo "❌ Error: artifact_name is required"
             exit 1
           fi
           
