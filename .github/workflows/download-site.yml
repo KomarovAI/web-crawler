@@ -1,3 +1,8 @@
+# @description Downloads and archives website content with Selenium/Python crawler
+# @requires Python 3.11, requirements.txt, smart_archiver_v4.py
+# @outputs Artifact: site-archive-RUN_ID (90 days retention)
+# @uses GitHub Actions, Python, Selenium, PostgreSQL (optional)
+
 name: Download Site (Artifact Only)
 
 on:
@@ -67,6 +72,14 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: requirements.txt
+      
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
       
       - name: Install dependencies
         run: |
@@ -163,7 +176,7 @@ jobs:
           fi
           
           echo "✅ Archive found: $ARCHIVE_DIR"
-          echo "📊 Archive contents:"
+          echo "📃 Archive contents:"
           du -sh "$ARCHIVE_DIR"
           find "$ARCHIVE_DIR" -type f | head -20
       
