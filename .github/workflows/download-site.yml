@@ -183,7 +183,7 @@ jobs:
           echo "**Artifact Name**: site-archive-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "**Retention**: 90 days" >> $GITHUB_STEP_SUMMARY
       
-      - name: Notify n8n on completion
+      - name: Notify n8n on completion (with SSL bypass)
         if: always() && github.event.inputs.resumeUrl != ''
         run: |
           RESUME_URL="${{ github.event.inputs.resumeUrl }}"
@@ -202,12 +202,14 @@ jobs:
             "workflow": "download-site",
             "domain": "$DOMAIN",
             "max_pages": "${{ steps.validate.outputs.max_pages_int }}",
+            "artifact_name": "site-archive-${{ github.run_id }}",
             "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           }
           EOF
             )
             
-            curl -X POST "$RESUME_URL" \
+            curl -k \
+              -X POST "$RESUME_URL" \
               -H "Content-Type: application/json" \
               -d "$PAYLOAD" \
               --retry 3 \
