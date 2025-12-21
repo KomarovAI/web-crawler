@@ -103,7 +103,7 @@ jobs:
           
           echo "✅ Archive verified: $DOMAIN ($FILE_COUNT files, $SIZE)"
 
-      - name: Clone target repository
+      - name: Format and initialize target repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ steps.validate.outputs.target_repo }}
@@ -116,42 +116,66 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          echo "🔐 Cloning $TARGET_REPO"
-          git clone --depth 1 "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . 2>&1 || {
+          echo "📂 Full repository format - destructive reset"
+          echo "📄 Cloning $TARGET_REPO"
+          
+          git clone "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . 2>&1 || {
             echo "ℹ️  First deploy - initializing new repo"
             git init
             git remote add origin "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git"
           }
           
-          # Fetch and checkout gh-pages
-          git fetch origin gh-pages 2>/dev/null || true
-          if git rev-parse --verify origin/gh-pages &>/dev/null; then
-            echo "📦 Checking out existing gh-pages branch"
-            git checkout -b gh-pages origin/gh-pages
-          else
-            echo "🆕 Creating new gh-pages branch"
-            git checkout --orphan gh-pages
+          echo "🗑️  Cleaning repository - removing ALL content"
+          
+          # Remove ALL files except .git
+          find . -maxdepth 1 -type f -delete
+          find . -maxdepth 1 -type d ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
+          
+          # Verify .git is still there
+          if [ ! -d ".git" ]; then
+            echo "⚠️  .git was removed, reinitializing"
+            git init
+            git remote add origin "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git"
           fi
           
+          echo "📄 Creating fresh gh-pages branch (orphan)"
+          
+          # Create orphan gh-pages branch
+          git checkout --orphan gh-pages 2>/dev/null || git checkout gh-pages
+          git rm -rf . 2>/dev/null || true
+          
+          echo "💾 Creating .nojekyll file"
+          touch .nojekyll
+          
+          git add .nojekyll
+          git commit -m "chore: Initialize gh-pages branch" || true
+          
           echo "$TEMP_DIR" > /tmp/target_dir
+          echo "✅ Repository fully reset and ready for deployment"
 
-      - name: Prepare target directory
+      - name: Deploy archive to clean repository
+        id: deploy
         run: |
           TEMP_DIR=$(cat /tmp/target_dir)
           cd "$TEMP_DIR"
           
-          echo "🗑️  Cleaning old files"
-          find . -type f ! -path './.git*' ! -name '.gitignore' -delete 2>/dev/null || true
-          find . -type d ! -path './.git*' -empty -delete 2>/dev/null || true
-          
-          echo "📁 Extracting archive"
+          echo "📁 Extracting archive to root"
           ARCHIVE_PATH="$GITHUB_WORKSPACE/artifact-download/${{ steps.extract.outputs.archive_dir }}"
-          cp -r "$ARCHIVE_PATH"/* . 2>/dev/null || true
           
-          # Ensure .nojekyll (prevent Jekyll processing)
+          # Copy all archive contents to root of target repo
+          cp -rv "$ARCHIVE_PATH"/* . 2>/dev/null || true
+          
+          # Ensure .nojekyll exists
           touch .nojekyll
           
-          echo "✅ Archive extracted"
+          # Count final files
+          FINAL_FILE_COUNT=$(find . -type f ! -path './.git*' | wc -l)
+          FINAL_SIZE=$(du -sh . | cut -f1)
+          
+          echo "final_files=$FINAL_FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "final_size=$FINAL_SIZE" >> $GITHUB_OUTPUT
+          
+          echo "✅ Archive deployed: $FINAL_FILE_COUNT files ($FINAL_SIZE)"
 
       - name: Clean WARC files
         if: github.event.inputs.clean_warc == 'true'
@@ -159,12 +183,15 @@ jobs:
           TEMP_DIR=$(cat /tmp/target_dir)
           cd "$TEMP_DIR"
           
-          echo "🧹 Removing WARC files"
+          echo "🧹 Scanning for WARC files"
           WARC_COUNT=$(find . -name "*.warc" -o -name "*.warc.gz" | wc -l)
-          find . -name "*.warc" -o -name "*.warc.gz" | xargs rm -f 2>/dev/null || true
           
           if [ $WARC_COUNT -gt 0 ]; then
-            echo "✅ Removed $WARC_COUNT WARC files"
+            echo "🗑️  Removing $WARC_COUNT WARC files"
+            find . -name "*.warc" -o -name "*.warc.gz" | xargs rm -f
+            echo "✅ WARC files removed"
+          else
+            echo "✅ No WARC files found"
           fi
 
       - name: Rewrite URLs to local paths
@@ -184,19 +211,25 @@ jobs:
           DOMAIN = "${{ steps.extract.outputs.domain }}"
           SAFE_DOMAIN = re.escape(DOMAIN)
           
-          # URL rewrite patterns
+          # URL rewrite patterns - aggressive matching
           patterns = [
-              # href URLs
-              (rf'href=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=-]*)["\'']',
+              # href URLs (quoted)
+              (rf'href=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
                r'href="\1"'),
               # src URLs
-              (rf'src=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=-]*)["\'']',
+              (rf'src=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
                r'src="\1"'),
-              # action URLs
-              (rf'action=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=-]*)["\'']',
+              # action URLs (forms)
+              (rf'action=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
                r'action="\1"'),
-              # srcset
-              (rf'https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=-]*)',
+              # srcset (images)
+              (rf'srcset=["\']https?://{SAFE_DOMAIN}([^"\']*)["\'']',
+               r'srcset="\1"'),
+              # data URLs
+              (rf'data=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
+               r'data="\1"'),
+              # Unquoted URLs in JavaScript
+              (rf'https?://{SAFE_DOMAIN}(/[a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)',
                r'\1'),
           ]
           
@@ -207,6 +240,7 @@ jobs:
           error_count = 0
           
           for root, dirs, files in os.walk('.'):
+              # Skip .git directory
               if '.git' in dirs:
                   dirs.remove('.git')
               
@@ -228,7 +262,7 @@ jobs:
                               modified_count += 1
                       except Exception as e:
                           error_count += 1
-                          if error_count <= 5:  # Show first 5 errors only
+                          if error_count <= 5:
                               print(f"⚠️  Error in {filepath}: {str(e)[:100]}")
           
           print(f"✅ Rewrote {modified_count} files")
@@ -236,7 +270,7 @@ jobs:
               print(f"⚠️  {error_count - 5} more errors (not shown)")
           PYTHON
 
-      - name: Commit and push to gh-pages
+      - name: Commit and force push to gh-pages
         id: commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -244,48 +278,75 @@ jobs:
           TEMP_DIR=$(cat /tmp/target_dir)
           cd "$TEMP_DIR"
           
+          echo "📋 Staging changes"
           git add -A
           
+          # Check for changes
           if git diff --cached --quiet; then
-            echo "ℹ️  No changes to commit"
+            echo "ℹ️  No changes to commit (empty archive?)"
             echo "has_changes=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
           DOMAIN="${{ steps.extract.outputs.domain }}"
-          FILES="${{ steps.extract.outputs.file_count }}"
+          SOURCE_RUN="${{ steps.validate.outputs.source_run_id }}"
           
-          git commit -m "chore(pages): Deploy $DOMAIN" \
-                     -m "Source run: ${{ steps.validate.outputs.source_run_id }}" \
-                     -m "Files: $FILES | Size: ${{ steps.extract.outputs.size }}" \
-                     -m "Deployed by: web-crawler automation (run ${{ github.run_id }})" \
-                     -m "Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo "📝 Creating commit"
+          git commit -m "chore(pages): Deploy $DOMAIN from web-crawler" \
+                     -m "" \
+                     -m "Source Information:" \
+                     -m "  Run ID: $SOURCE_RUN" \
+                     -m "  Domain: $DOMAIN" \
+                     -m "  Deployment Run: ${{ github.run_id }}" \
+                     -m "" \
+                     -m "Archive Details:" \
+                     -m "  Files: ${{ steps.extract.outputs.file_count }}" \
+                     -m "  Size: ${{ steps.extract.outputs.size }}" \
+                     -m "" \
+                     -m "Deployment Details:" \
+                     -m "  Final Files: ${{ steps.deploy.outputs.final_files }}" \
+                     -m "  Final Size: ${{ steps.deploy.outputs.final_size }}" \
+                     -m "  Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           
-          echo "📤 Pushing to gh-pages"
+          echo "🚀 Force pushing to gh-pages (complete reset)"
           git push -u origin gh-pages --force
           
           echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "✅ Successfully pushed to ${{ steps.validate.outputs.target_repo }}"
+          echo "✅ Successfully deployed (full reset + push)"
 
       - name: Create GitHub Pages deployment summary
         if: always()
         run: |
           cat >> $GITHUB_STEP_SUMMARY <<'EOF'
-          ## 🚀 GitHub Pages Deployment
+          ## 🚀 GitHub Pages Deployment Complete
           
+          ### Deployment Status
           | Property | Value |
           |----------|-------|
           | **Status** | ${{ job.status }} |
           | **Source Run** | ${{ steps.validate.outputs.source_run_id }} |
           | **Target Repo** | ${{ steps.validate.outputs.target_repo }} |
           | **Branch** | gh-pages |
+          | **Reset Type** | Full Format (Orphan Branch) |
+          
+          ### Archive Information
+          | Property | Value |
+          |----------|-------|
           | **Domain** | ${{ steps.extract.outputs.domain }} |
-          | **Files** | ${{ steps.extract.outputs.file_count }} |
-          | **Size** | ${{ steps.extract.outputs.size }} |
+          | **Original Files** | ${{ steps.extract.outputs.file_count }} |
+          | **Original Size** | ${{ steps.extract.outputs.size }} |
+          | **Final Files** | ${{ steps.deploy.outputs.final_files }} |
+          | **Final Size** | ${{ steps.deploy.outputs.final_size }} |
           | **Changes Committed** | ${{ steps.commit.outputs.has_changes }} |
           
           ### 📍 GitHub Pages URL
           \`https://$(echo '${{ steps.validate.outputs.target_repo }}' | cut -d'/' -f1).github.io/$(echo '${{ steps.validate.outputs.target_repo }}' | cut -d'/' -f2)/\`
+          
+          ### Notes
+          - 🗑️ Repository fully formatted before deployment
+          - 🧹 WARC files cleaned
+          - 🔗 URLs rewritten to local paths
+          - 👑 Force pushed to gh-pages (clean history)
           
           EOF
 
@@ -314,9 +375,12 @@ jobs:
             "source_run_id": ${{ steps.validate.outputs.source_run_id }},
             "target_repo": "${{ steps.validate.outputs.target_repo }}",
             "domain": "${{ steps.extract.outputs.domain }}",
-            "files_deployed": "${{ steps.extract.outputs.file_count }}",
-            "deployment_size": "${{ steps.extract.outputs.size }}",
+            "original_files": "${{ steps.extract.outputs.file_count }}",
+            "original_size": "${{ steps.extract.outputs.size }}",
+            "final_files": "${{ steps.deploy.outputs.final_files }}",
+            "final_size": "${{ steps.deploy.outputs.final_size }}",
             "pages_url": "${PAGES_URL}",
+            "reset_type": "full-format",
             "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           }
           EOF
