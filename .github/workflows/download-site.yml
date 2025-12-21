@@ -5,24 +5,24 @@ on:
     inputs:
       url:
         description: 'Start URL (http/https)'
-        required: true
+        required: false
         type: string
-        default: 'https://callmedley.com'
+        default: ''
       max_pages:
         description: 'Max pages to crawl (1-5000)'
-        required: true
+        required: false
         type: string
-        default: '100'
+        default: ''
       use_selenium:
         description: 'Use Selenium for Cloudflare'
         required: false
         type: string
-        default: 'true'
+        default: ''
       ignore_robots:
         description: 'Ignore robots.txt'
         required: false
         type: string
-        default: 'false'
+        default: ''
       target_repo:
         description: 'Target repository for upload (owner/repo)'
         required: false
@@ -32,7 +32,7 @@ on:
         description: 'Auto deploy after download'
         required: false
         type: string
-        default: 'false'
+        default: ''
       reuse_artifact_run_id:
         description: 'Reuse artifact from specific run ID'
         required: false
@@ -73,19 +73,30 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Normalize inputs
+      - name: Set defaults and normalize inputs
         id: normalize
         run: |
-          # Convert string booleans to lowercase for consistency
+          # Set defaults if empty
+          URL="${{ github.event.inputs.url }}"
+          MAX_PAGES="${{ github.event.inputs.max_pages }}"
           USE_SELENIUM="${{ github.event.inputs.use_selenium }}"
           IGNORE_ROBOTS="${{ github.event.inputs.ignore_robots }}"
           AUTO_DEPLOY="${{ github.event.inputs.auto_deploy }}"
+          
+          # Apply defaults if empty
+          URL=${URL:-"https://callmedley.com"}
+          MAX_PAGES=${MAX_PAGES:-"100"}
+          USE_SELENIUM=${USE_SELENIUM:-"true"}
+          IGNORE_ROBOTS=${IGNORE_ROBOTS:-"false"}
+          AUTO_DEPLOY=${AUTO_DEPLOY:-"false"}
           
           # Normalize boolean strings
           USE_SELENIUM=$(echo "$USE_SELENIUM" | tr '[:upper:]' '[:lower:]')
           IGNORE_ROBOTS=$(echo "$IGNORE_ROBOTS" | tr '[:upper:]' '[:lower:]')
           AUTO_DEPLOY=$(echo "$AUTO_DEPLOY" | tr '[:upper:]' '[:lower:]')
           
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
           echo "use_selenium=$USE_SELENIUM" >> $GITHUB_OUTPUT
           echo "ignore_robots=$IGNORE_ROBOTS" >> $GITHUB_OUTPUT
           echo "auto_deploy=$AUTO_DEPLOY" >> $GITHUB_OUTPUT
@@ -94,8 +105,8 @@ jobs:
       - name: Validate inputs
         id: validate
         run: |
-          URL="${{ github.event.inputs.url }}"
-          MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          URL="${{ steps.normalize.outputs.url }}"
+          MAX_PAGES="${{ steps.normalize.outputs.max_pages }}"
           
           # Validate URL
           if [[ ! "$URL" =~ ^https?:// ]]; then
@@ -120,7 +131,7 @@ jobs:
       - name: Download site with smart_archiver_v4.py
         run: |
           python3 << 'PYTHON'
-          url = '${{ github.event.inputs.url }}'
+          url = '${{ steps.normalize.outputs.url }}'
           max_pages = '${{ steps.validate.outputs.max_pages_int }}'
           domain = '${{ steps.validate.outputs.domain }}'
           
@@ -173,7 +184,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **URL** | ${{ github.event.inputs.url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | ${{ steps.normalize.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Max Pages** | ${{ steps.validate.outputs.max_pages_int }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Domain** | ${{ steps.validate.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Selenium** | ${{ steps.normalize.outputs.use_selenium }} |" >> $GITHUB_STEP_SUMMARY
