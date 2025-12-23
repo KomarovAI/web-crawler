@@ -17,31 +17,6 @@ on:
         required: false
         type: string
         default: '500'
-      use_selenium:
-        description: 'Use Selenium (default: false)'
-        required: false
-        type: string
-        default: 'false'
-      useSelenium:
-        description: 'Use Selenium - alternative name (default: false)'
-        required: false
-        type: string
-        default: 'false'
-      ignore_robots:
-        description: 'Ignore robots.txt (default: true)'
-        required: false
-        type: string
-        default: 'true'
-      ignoreRobots:
-        description: 'Ignore robots.txt - alternative name (default: true)'
-        required: false
-        type: string
-        default: 'true'
-      resumeUrl:
-        description: 'n8n callback webhook URL (optional)'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -54,10 +29,11 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (LATEST)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install wget
@@ -74,19 +50,20 @@ jobs:
       - name: Validate and prepare inputs
         id: validate
         run: |
-          # Handle both naming conventions (snake_case and camelCase)
+          # Get inputs
           URL="${{ github.event.inputs.url }}"
           OUTPUT_DIR="${{ github.event.inputs.output_dir }}"
           MAX_PAGES="${{ github.event.inputs.max_pages }}"
-          USE_SELENIUM="${{ github.event.inputs.use_selenium || github.event.inputs.useSelenium }}"
-          IGNORE_ROBOTS="${{ github.event.inputs.ignore_robots || github.event.inputs.ignoreRobots }}"
           
           # Apply defaults
           URL=${URL:-"https://callmedley.com"}
           OUTPUT_DIR=${OUTPUT_DIR:-"site_archive"}
           MAX_PAGES=${MAX_PAGES:-"500"}
-          USE_SELENIUM=${USE_SELENIUM:-"false"}
-          IGNORE_ROBOTS=${IGNORE_ROBOTS:-"true"}
+          
+          echo "\n✅ Raw inputs:"
+          echo "   URL: $URL"
+          echo "   Output Dir: $OUTPUT_DIR"
+          echo "   Max Pages: $MAX_PAGES\n"
           
           # Validate URL
           if [[ ! "$URL" =~ ^https?:// ]]; then
@@ -94,8 +71,13 @@ jobs:
             exit 1
           fi
           
-          # Validate max_pages
-          if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]] || (( MAX_PAGES < 1 || MAX_PAGES > 5000 )); then
+          # Validate max_pages (CRITICAL)
+          if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]]; then
+            echo "❌ Error: max_pages must be numeric, got \"$MAX_PAGES\""
+            exit 1
+          fi
+          
+          if (( MAX_PAGES < 1 )) || (( MAX_PAGES > 5000 )); then
             echo "❌ Error: max_pages must be 1-5000, got $MAX_PAGES"
             exit 1
           fi
@@ -106,19 +88,21 @@ jobs:
           echo "url=$URL" >> $GITHUB_OUTPUT
           echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
           echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
-          echo "use_selenium=$USE_SELENIUM" >> $GITHUB_OUTPUT
-          echo "ignore_robots=$IGNORE_ROBOTS" >> $GITHUB_OUTPUT
           
-          echo "✅ Inputs validated:"
+          echo "\n✅ Validated inputs:"
           echo "   URL: $URL"
           echo "   Output Dir: $SANITIZED_DIR"
-          echo "   Max Pages: $MAX_PAGES"
-          echo "   Use Selenium: $USE_SELENIUM"
-          echo "   Ignore robots.txt: $IGNORE_ROBOTS"
+          echo "   Max Pages: $MAX_PAGES (PASSED)"
 
-      - name: Download website with wget
+      - name: Download website (with max_pages)
         id: download
         run: |
+          echo "\n🚀 Starting crawler with parameters:"
+          echo "   URL: ${{ steps.validate.outputs.url }}"
+          echo "   Output Dir: ${{ steps.validate.outputs.output_dir }}"
+          echo "   Max Pages: ${{ steps.validate.outputs.max_pages }}"
+          echo ""
+          
           python3 crawler.py \
             "${{ steps.validate.outputs.url }}" \
             "${{ steps.validate.outputs.output_dir }}" \
@@ -126,20 +110,28 @@ jobs:
 
       - name: Verify archive
         id: verify
+        if: always()
         run: |
           OUTPUT_DIR="${{ steps.validate.outputs.output_dir }}"
           DOMAIN=$(echo "${{ steps.validate.outputs.url }}" | sed -E 's|^https?://||' | sed -E 's|/.*||')
           ARCHIVE_PATH="$OUTPUT_DIR/$DOMAIN"
           
-          if [ ! -d "$ARCHIVE_PATH" ] || [ -z "$(ls -A "$ARCHIVE_PATH" 2>/dev/null)" ]; then
-            echo "❌ ERROR: Archive is empty or missing: $ARCHIVE_PATH"
+          echo "\n🔍 Verifying archive at: $ARCHIVE_PATH"
+          
+          if [ ! -d "$ARCHIVE_PATH" ]; then
+            echo "❌ ERROR: Archive directory missing: $ARCHIVE_PATH"
+            exit 1
+          fi
+          
+          if [ -z "$(ls -A "$ARCHIVE_PATH" 2>/dev/null)" ]; then
+            echo "❌ ERROR: Archive is empty"
             exit 1
           fi
           
           FILE_COUNT=$(find "$ARCHIVE_PATH" -type f | wc -l)
           DIR_SIZE=$(du -sh "$ARCHIVE_PATH" | cut -f1)
           
-          echo "✅ Archive verified successfully!"
+          echo "✅ Archive verified:"
           echo "   Files: $FILE_COUNT"
           echo "   Size: $DIR_SIZE"
           
@@ -168,15 +160,3 @@ jobs:
           echo "| **Files** | ${{ steps.verify.outputs.file_count }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Size** | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Status** | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-
-      - name: Send n8n callback
-        if: always() && github.event.inputs.resumeUrl != ''
-        continue-on-error: true
-        run: |
-          RESUME_URL="${{ github.event.inputs.resumeUrl }}"
-          if [ -n "$RESUME_URL" ]; then
-            curl -X POST "$RESUME_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"status\":\"${{ job.status }}\",\"run_id\":\"${{ github.run_id }}\",\"max_pages\":\"${{ steps.validate.outputs.max_pages }}\",\"files\":\"${{ steps.verify.outputs.file_count }}\",\"size\":\"${{ steps.verify.outputs.dir_size }}\"}" \
-              --retry 3 || true
-          fi
