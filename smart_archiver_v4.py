@@ -148,7 +148,7 @@ class ProfessionalArchiverV5_2:
     
     def __init__(self, start_url: str, archive_path: str = None, 
                  max_depth: int = 6, max_pages: int = 500, use_selenium: bool = True,
-                 ignore_robots: bool = False):
+                 ignore_robots: bool = True):  # ← CHANGED: DEFAULT TRUE
         self.start_url = start_url
         self.domain = urlparse(start_url).netloc.lower()
         self.domain_safe = self.domain.replace('.', '_')
@@ -418,7 +418,7 @@ class ProfessionalArchiverV5_2:
     
     async def archive(self):
         logger.info(f"🚀 ArchiveBot v5.2 - Starting: {self.start_url}")
-        logger.info(f"⚙️ Config: SELENIUM={self.use_selenium}, WARC=True, ROBOTS={not self.ignore_robots}, MEDIA=True")
+        logger.info(f"⚙️ Config: SELENIUM={self.use_selenium}, WARC=True, ROBOTS_IGNORED={self.ignore_robots}, MEDIA=True")
         logger.info(f"📋 robots.txt Crawl-Delay: {self.robots_checker.crawl_delay}s")
         logger.info("="*70)
         
@@ -434,7 +434,7 @@ class ProfessionalArchiverV5_2:
         }
         
         async with aiohttp.ClientSession(timeout=timeout, connector=connector, headers=headers) as session:
-            logger.info("🕷️ CRAWLING WITH BFS + WARC + OPTIONAL ROBOTS.TXT COMPLIANCE")
+            logger.info("🕷️ CRAWLING WITH BFS + WARC + ROBOTS BYPASS ENABLED")
             logger.info("="*70)
             
             while self.queue and len(self.visited) < self.max_pages:
@@ -597,7 +597,7 @@ class ProfessionalArchiverV5_2:
         print(f"\n🏆 v5.2 IMPROVEMENTS:")
         print(f"  ✅ Selenium + undetected-chromedriver for Cloudflare")
         print(f"  ✅ WARC format generation (ISO 28500:2017)")
-        print(f"  ✅ robots.txt parsing (OPTIONAL - can be disabled)")
+        print(f"  ✅ robots.txt parsing (IGNORED BY DEFAULT - override with env var)")
         print(f"  ✅ Crawl-Delay respect (OPTIONAL)")
         print(f"  ✅ Media detection (video, audio, iframe)")
         print(f"  ✅ Full asset extraction (CSS, images, fonts, JS)")
@@ -621,7 +621,7 @@ async def main():
     url = sys.argv[1] if len(sys.argv) > 1 else 'https://callmedley.com'
     max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else 500
     use_selenium = os.getenv('USE_SELENIUM', 'true').lower() == 'true'
-    ignore_robots = os.getenv('IGNORE_ROBOTS', 'false').lower() == 'true'  # NEW FLAG
+    ignore_robots = os.getenv('IGNORE_ROBOTS', 'true').lower() == 'true'  # ← NOW DEFAULT TRUE!
     
     archiver = ProfessionalArchiverV5_2(url, max_depth=6, max_pages=max_pages, 
                                        use_selenium=use_selenium, ignore_robots=ignore_robots)
