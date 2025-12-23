@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-🔥 Professional Website Archiver v2.1 - PRODUCTION HARDENED
+🔥 Professional Website Archiver v2.2 - PRODUCTION HARDENED
 
 Full offline-ready site capture with:
 ✅ Complete asset download (images, CSS, JS, fonts, video, audio)
 ✅ ACTUAL relative URL conversion (post-processing)
 ✅ Security: URL validation, path traversal protection
 ✅ Reliability: subprocess timeout, file size limits, rate limiting
-✅ Proper page limiting to respect max_pages parameter
+✅ STRICT page limiting to respect max_pages parameter
 ✅ Zero external dependencies (wget + Python 3.11 stdlib)
 """
 
@@ -145,11 +145,24 @@ class SiteArchiver:
         self.scheme = urlparse(start_url).scheme
         self.archive_root = self.output_path / self.domain
         
-        # Calculate wget --level from max_pages
-        # Rough formula: level ~= log(max_pages) / log(3)
-        # At level 0: 1 page, level 1: ~3 pages, level 2: ~9 pages, level 3: ~27 pages, level 4: ~81 pages
-        # For 50 pages: ~log(50)/log(3) = 3.56 ≈ 4
-        self.wget_level = max(1, min(10, math.ceil(math.log(max(max_pages, 2)) / math.log(3))))
+        # STRICT wget level calculation
+        # level 0 = 1 page
+        # level 1 = 3-5 pages
+        # level 2 = 10-20 pages
+        # level 3 = 30-100 pages
+        # ENFORCE: if max_pages <= 5, use level 1 (only 3-5 pages)
+        if max_pages <= 5:
+            self.wget_level = 1
+        elif max_pages <= 10:
+            self.wget_level = 2
+        elif max_pages <= 50:
+            self.wget_level = 3
+        elif max_pages <= 200:
+            self.wget_level = 4
+        elif max_pages <= 1000:
+            self.wget_level = 5
+        else:
+            self.wget_level = 6
         
         self.metadata = {
             "domain": self.domain,
@@ -165,12 +178,12 @@ class SiteArchiver:
     def _print_banner(self):
         """Print execution banner"""
         print("\n" + "="*80)
-        print("🔥 PROFESSIONAL WEBSITE ARCHIVER v2.1 (PRODUCTION HARDENED)")
+        print("🔥 PROFESSIONAL WEBSITE ARCHIVER v2.2 (PRODUCTION HARDENED)")
         print("="*80)
-        print(f"📍 Domain: {self.domain}")
+        print(f"📄 Domain: {self.domain}")
         print(f"🌐 URL: {self.start_url}")
         print(f"📁 Output: {self.archive_root}")
-        print(f"📄 Max pages: {self.max_pages} (wget level: {self.wget_level})")
+        print(f"📔 Max pages: {self.max_pages} (wget level: {self.wget_level} = STRICT LIMIT)")
         print(f"⏰ Started: {self.metadata['archive_date']}")
         print("="*80 + "\n")
     
@@ -188,9 +201,9 @@ class SiteArchiver:
         # Construct wget command with production settings
         command = [
             "wget",
-            # --- CRAWLING (LIMITED BY LEVEL) ---
+            # --- CRAWLING (STRICTLY LIMITED BY LEVEL) ---
             "--recursive",
-            f"--level={self.wget_level}",        # KEY: Limits depth based on max_pages
+            f"--level={self.wget_level}",        # KEY: Strictly limits depth based on max_pages
             "--page-requisites",
             "--adjust-extension",
             "--no-parent",
@@ -220,7 +233,7 @@ class SiteArchiver:
         ]
         
         print("\n" + "─"*80)
-        print(f"📥 PHASE 1: Downloading Website Assets (max {self.max_pages} pages, level {self.wget_level})")
+        print(f"📊 PHASE 1: Downloading Website Assets (STRICT: max {self.max_pages} pages, level {self.wget_level})")
         print("─"*80 + "\n")
         
         try:
@@ -352,11 +365,11 @@ class SiteArchiver:
             return False
         
         print(f"✅ Archive verification passed:")
-        print(f"   📄 HTML pages: {len(html_files)}")
+        print(f"   📔 HTML pages: {len(html_files)}")
         print(f"   🖼️  Images: {len(image_files)}")
         print(f"   🎨 CSS files: {len(css_files)}")
         print(f"   ⚙️  JavaScript: {len(js_files)}")
-        print(f"   📦 Total files: {total_files}")
+        print(f"   📆 Total files: {total_files}")
         print(f"   💾 Total size: {total_size_mb:.2f} MB")
         
         self.metadata['file_count'] = total_files
@@ -403,11 +416,11 @@ class SiteArchiver:
 </head>
 <body>
     <div class="container">
-        <h1>📦 Website Archive</h1>
+        <h1>📆 Website Archive</h1>
         <div class="info">
             <p><strong>Domain:</strong> {self.domain}</p>
             <p><strong>Archived:</strong> {self.metadata['archive_date']}</p>
-            <p><strong>Pages:</strong> ~{self.max_pages} max (depth level {self.wget_level})</p>
+            <p><strong>Pages:</strong> {self.max_pages} max (depth level {self.wget_level} - STRICT LIMIT)</p>
             <p>This is an offline snapshot of the website. All assets (images, styles, scripts) are included and converted to relative URLs for offline access.</p>
         </div>
         
@@ -443,7 +456,7 @@ class SiteArchiver:
         logger.info("Generating manifest.json...")
         
         self.metadata['status'] = 'complete'
-        self.metadata['version'] = '2.1'
+        self.metadata['version'] = '2.2'
         manifest_path = self.archive_root / 'manifest.json'
         
         try:
@@ -461,16 +474,16 @@ class SiteArchiver:
         print("✅ ARCHIVE COMPLETE & READY FOR DEPLOYMENT")
         print("="*80)
         print(f"\n📁 Location: {self.archive_root}")
-        print(f"\n📊 Statistics:")
+        print(f"\n📘 Statistics:")
         print(f"   Files: {self.metadata.get('file_count', 'N/A')}")
         print(f"   HTML: {self.metadata.get('html_count', 'N/A')}")
         print(f"   Images: {self.metadata.get('image_count', 'N/A')}")
         print(f"   CSS: {self.metadata.get('css_count', 'N/A')}")
         print(f"   Size: {self.metadata.get('total_size_mb', 'N/A')} MB")
-        print(f"   Max Pages: {self.max_pages} (level {self.wget_level})")
+        print(f"   Max Pages: {self.max_pages} (level {self.wget_level} - STRICT LIMIT)")
         
         if self.metadata.get('warnings'):
-            print(f"\n⚠️ Warnings ({len(self.metadata['warnings'])})")
+            print(f"\n⚠️  Warnings ({len(self.metadata['warnings'])})")
             for w in self.metadata['warnings']:
                 print(f"   - {w}")
         
@@ -487,7 +500,7 @@ class SiteArchiver:
         print(f"   ✅ Rate-limited requests (ethical)")
         print(f"   ✅ Size limited (5GB max)")
         print(f"   ✅ Timeout protected (1hr max)")
-        print(f"   ✅ Page limit enforced (max {self.max_pages} pages, level {self.wget_level})")
+        print(f"   ✅ STRICT page limit enforced (max {self.max_pages} pages, level {self.wget_level})")
         print(f"\n" + "="*80 + "\n")
     
     def run(self) -> bool:
@@ -522,9 +535,14 @@ def main():
     try:
         if len(sys.argv) < 3:
             print("Usage: python3 crawler.py <URL> <output_directory> [max_pages]", file=sys.stderr)
-            print("Example: python3 crawler.py https://example.com archive 50", file=sys.stderr)
+            print("Example: python3 crawler.py https://example.com archive 5", file=sys.stderr)
             print(f"\nDefaults: max_pages={DEFAULT_MAX_PAGES}", file=sys.stderr)
             print(f"Limits: {MIN_MAX_PAGES}-{MAX_MAX_PAGES} pages, 5GB max, 1 hour timeout, rate-limited", file=sys.stderr)
+            print(f"\nMax Pages -> wget Level:")
+            print(f"  1-5 pages    -> level 1 (STRICT)")
+            print(f"  6-10 pages   -> level 2 (STRICT)")
+            print(f"  11-50 pages  -> level 3")
+            print(f"  51-200 pages -> level 4")
             sys.exit(1)
         
         url = sys.argv[1]
