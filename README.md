@@ -1,362 +1,327 @@
-# 🔥 ArchiveBot v5.2 - Production-Grade Web Archiver
+# 🔥 Professional Website Archiver
 
-**Purpose:** 🤖 Professional web archiving with ISO 28500:2017 compliance  
-**Status:** ✅ Production Ready (98/100 compliance score)  
-**Standard:** WARC 1.0 | robots.txt RFC 9309 | Cloudflare bypass  
-**Auto-Execute:** GitHub Actions scheduled/on-demand  
-
----
-
-## 🌟 What's New in v5.2
-
-### ✅ WARC Format Support (ISO 28500:2017)
-- Generates WARC 1.0 compliant archives
-- WARC-Record-ID for each page
-- WARC-Payload-Digest (SHA256) for integrity
-- Full HTTP headers in records
-- CDX indexing with WARC references
-
-### ✅ robots.txt Compliance (RFC 9309)
-- Parses /robots.txt from domain
-- Respects Disallow rules
-- Honors Crawl-Delay
-- Proper User-Agent registration
-- Blocks non-compliant URLs
-
-### ✅ Media Detection
-- Detects `<video>` tags
-- Detects `<audio>` tags
-- Detects internal `<iframe>` tags
-- Logs media metadata
-- Downloadable/reference distinction
-
-### ✅ Previous Features (v5.1+)
-- ✅ Cloudflare bypass (undetected-chromedriver)
-- ✅ Full asset extraction (CSS, images, fonts, JS)
-- ✅ Exponential backoff (2^n seconds)
-- ✅ SHA256 deduplication
-- ✅ Zero error handling
-- ✅ SQLite CDX indexing
-- ✅ Intelligent BFS crawling
+**Purpose:** 🤖 Reliable website archival for offline access  
+**Status:** ✅ Production Ready (with security hardening)  
+**Current Version:** 2.1 (Hardened)  
+**Auto-Execute:** GitHub Actions on-demand  
 
 ---
 
-## 🏆 Compliance Score: 98/100
+## 🌟 Features
 
-| Standard | Status | Notes |
-|----------|--------|-------|
-| **ISO 28500:2017 (WARC)** | ✅ 98% | Full compliance |
-| **RFC 9309 (robots.txt)** | ✅ 100% | Full compliance |
-| **Web Archive Best Practices** | ✅ 95% | Excellent |
-| **Internet Archive Standards** | ✅ 90% | Production-grade |
+### Core Capabilities
+- ✅ **Complete asset download** - HTML, CSS, JS, images, fonts, video, audio
+- ✅ **Offline-ready** - All links converted to relative URLs
+- ✅ **Production hardened** - Security validation, timeout protection, size limits
+- ✅ **Rate-limited** - Ethical crawling with request delays
+- ✅ **Zero dependencies** - Uses system `wget` + Python 3.11 stdlib
+
+### Security Features
+- ✅ **URL validation** - Blocks private IPs, localhost, invalid schemes
+- ✅ **Path traversal protection** - Sanitized output directory
+- ✅ **Subprocess timeout** - 1 hour max for any download
+- ✅ **File size limits** - 5GB maximum per archive
+- ✅ **Rate limiting** - 2 second delays, 500KB/s max
 
 ---
 
-## 🎈 Quick Start
+## 🚀 Quick Start
 
 ### Installation
 ```bash
 git clone https://github.com/KomarovAI/web-crawler
 cd web-crawler
-pip install -r requirements.txt
+# No pip install needed - uses system wget
 ```
 
-### Usage
+### Usage (Local)
 ```bash
-# Full URL + max pages (with Selenium for Cloudflare)
-python3 smart_archiver_v4.py https://callmedley.com 500
+# Download site to local machine
+python3 crawler.py https://example.com output_dir
 
-# Without Selenium (faster, HTTP only)
-USE_SELENIUM=false python3 smart_archiver_v4.py https://example.com 200
+# Output structure:
+# output_dir/
+# └─ example.com/              # Domain folder
+#    ├─ index.html             # Auto-generated navigation
+#    ├─ manifest.json          # Metadata
+#    ├─ page1.html
+#    ├─ page2.html
+#    └─ assets/
+#       ├─ images/             # All images
+#       ├─ styles/             # All CSS
+#       ├─ scripts/            # All JS
+#       └─ media/              # Videos, audio
 ```
 
-### Output Structure
-```
-archive_callmedley_com/
-├── warc/
-│   └── callmedley_com.warc        ✅ 384 WARC records (ISO 28500:2017)
-├── pages/                         ✅ 384 HTML files
-├── assets/
-│   ├── images/                   ✅ 2000+ images (JPG, PNG, WebP, SVG)
-│   ├── styles/                   ✅ 100+ CSS files
-│   ├── scripts/                  ✅ 150+ JavaScript files
-│   ├── fonts/                    ✅ 50+ font files
-│   └── media/                    ✅ Video/audio metadata
-├─┠└ callmedley_com.db              ✅ SQLite index (CDX format)
-└── README.md                      ✅ Archive documentation
-```
+### Usage (GitHub Actions)
+
+1. Go to **Actions** tab → **Download Site with Wget**
+2. Click **Run workflow**
+3. Enter:
+   - **URL:** `https://your-domain.com`
+   - **Output dir:** `site_archive` (or custom name)
+4. Wait 2-10 minutes (depends on site size)
+5. Download artifact from run summary
 
 ---
 
-## 🛠️ Configuration
+## 📄 Output Structure
 
-### Environment Variables
+```
+site_archive/
+└─ domain.com/
+   ├─ index.html                🌐 Auto-generated entry point
+   ├─ manifest.json             📋 Metadata (timestamps, stats)
+   ├─ page1.html                📄 HTML pages
+   ├─ page2.html
+   ├─ about/
+   │  └─ index.html
+   ├─ blog/
+   │  ├─ post1.html
+   │  └─ post2.html
+   └─ assets/
+      ├─ images/
+      │  ├─ logo.png             🖼️ All image types
+      │  ├─ banner.jpg
+      │  └─ icon.svg
+      ├─ styles/
+      │  └─ main.css              🎨 All CSS files
+      ├─ scripts/
+      │  └─ app.js                ⚙️ All JS files
+      ├─ fonts/
+      │  ├─ font.woff            📋 Web fonts
+      │  └─ font.ttf
+      └─ media/
+         ├─ video.mp4             🎬 Video files
+         └─ audio.mp3             🎙️ Audio files
+```
+
+**Key feature:** All links in HTML are relative (e.g., `./assets/images/logo.png`)
+
+---
+
+## 🛠️ Deployment
+
+### Option 1: Static Web Server (Production)
 ```bash
-# .env
-STARTURL=https://your-domain.com
-MAXPAGES=500
-USE_SELENIUM=true              # For Cloudflare
-MAX_DEPTH=6                    # Crawl depth
-TIMEOUT=60                     # Request timeout (seconds)
-MAX_RETRIES=3                  # Retry attempts
+# Copy to web server
+sudo cp -r domain.com /var/www/html/
+
+# Access at: http://your-server/domain.com/
 ```
 
-### GitHub Actions (Scheduled)
-```yaml
-# Trigger: Actions tab → "Archive v5.2" → Run workflow
-# Inputs:
-# - URL: https://your-site.com
-# - Max Pages: 500
-# - Use Selenium: true
-
-# Output: Auto-uploaded as artifact (90 days retention)
+### Option 2: Python (Testing)
+```bash
+cd domain.com
+python3 -m http.server 8000
+# Access at: http://localhost:8000
 ```
 
----
-
-## 📊 Outputs
-
-### WARC Archive
+### Option 3: Docker (Production)
+```bash
+docker run -d \
+  -p 80:80 \
+  -v $(pwd)/domain.com:/usr/share/nginx/html:ro \
+  nginx:latest
 ```
-callmedley_com.warc
-```
-- **Format:** WARC 1.0 (ISO 28500:2017)
-- **Contains:** 384 WARC records
-- **Each record includes:**
-  - WARC headers (Record-ID, timestamp, digest)
-  - HTTP headers (status, content-type)
-  - Full page HTML payload
 
-### SQLite Database
-```
-callmedley_com.db
-```
-**Tables:**
-- `cdx_index` - WARC record index + references
-- `pages` - Crawled pages + robots.txt compliance
-- `assets` - Extracted CSS, images, fonts, JS
-- `media` - Detected video, audio, iframes
-- `error_log` - Crawl errors + retry attempts
+### Option 4: GitHub Pages (Free)
+```bash
+# Commit to your repo
+git add domain.com/
+git commit -m "Add domain.com archive"
+git push
 
-**Query Examples:**
-```sql
--- Find all pages
-SELECT uri, title FROM pages LIMIT 10;
-
--- Check robots.txt compliance
-SELECT COUNT(*) FROM pages WHERE robots_compliant = 1;
-
--- Find all images
-SELECT uri FROM assets WHERE asset_type = 'image';
-
--- Detect media
-SELECT uri, media_type FROM media WHERE media_type = 'video';
+# GitHub Pages serves it automatically
 ```
 
 ---
 
-## 🔡 Key Classes
+## 📊 Statistics Example
 
-### WARCWriter
-```python
-writer = WARCWriter(warc_path)
-writer.write_record(url, content, content_type, status_code)
-# Output: WARC-compliant records with headers
-```
-
-### RobotsChecker
-```python
-checker = RobotsChecker('example.com')
-if checker.can_fetch(url):
-    # Safe to crawl
-    await asyncio.sleep(checker.crawl_delay)
-else:
-    # Blocked by robots.txt
-    pass
-```
-
-### Media Extraction
-```python
-media = archiver._extract_media(html, base_url)
-# Returns: {video: [...], audio: [...], iframe: [...]}
+```json
+{
+  "domain": "example.com",
+  "start_url": "https://example.com",
+  "archive_date": "2025-12-23T04:00:29.123456",
+  "status": "complete",
+  "file_count": 1524,
+  "html_count": 42,
+  "image_count": 312,
+  "css_count": 8,
+  "js_count": 15,
+  "total_size_mb": 145.32,
+  "warnings": [],
+  "errors": [],
+  "version": "2.1"
+}
 ```
 
 ---
 
-## 📊 Statistics
+## 🔐 Security & Limits
 
-### callmedley.com Archive (v5.2 Example)
-```
-Domain: callmedley.com
-Pages crawled: 384
-Assets extracted: 2000+
-Media detected: 15
-Errors: 0
-Archive size: 126.3 MB
-WARC records: 384
+| Feature | Setting | Reason |
+|---------|---------|--------|
+| **URL validation** | Blocks private IPs | Prevent scanning internal networks |
+| **Max download time** | 1 hour | Prevent indefinite hangs |
+| **Max archive size** | 5 GB | Prevent disk fill |
+| **Request delay** | 2 seconds | Ethical crawling |
+| **Rate limit** | 500 KB/s | Don't overwhelm servers |
+| **Path traversal** | Blocked | Prevent `../` attacks |
 
-Compliance: 98/100 (ISO 28500:2017)
-Status: PRODUCTION READY 🚀
+---
+
+## ⚠️ Known Limitations
+
+- **JavaScript-heavy sites** - Static download won't render JS. Use `--use_selenium=true` for JavaScript-dependent sites (GitHub Actions option).
+- **Login-required content** - Can't authenticate. Must be publicly accessible.
+- **Dynamic content** - Only downloads HTML snapshot at crawl time.
+- **Large media files** - May hit 5GB limit on image/video-heavy sites. Adjust in code if needed.
+
+---
+
+## 🚫 What Changed from v5.2
+
+Old version (`smart_archiver_v4.py`) had issues:
+- \u274c Silent failures in GitHub Actions
+- \u274c Complex async/Selenium overhead
+- \u274c Missing dependencies (`asset_extractor`)
+- \u274c Over-engineered for simple task (WARC, SQLite)
+
+New version (`crawler.py v2.1`) is:
+- ✅ Simple and reliable (wget wrapper)
+- ✅ No external dependencies
+- ✅ Explicit error handling
+- ✅ Security hardened
+- ✅ Production ready
+
+---
+
+## 📚 Workflow Configuration
+
+### File: `.github/workflows/download-site.yml`
+
+**Triggers:**
+- Manual dispatch (via Actions tab)
+- Inputs:
+  - `url` - Website to archive (required)
+  - `output_dir` - Folder name (optional, default: `site_archive`)
+
+**Steps:**
+1. Checkout repo
+2. Install `wget`
+3. Setup Python 3.11
+4. Validate inputs
+5. Run `crawler.py`
+6. Verify archive
+7. Upload as artifact (30 day retention)
+
+**Outputs:**
+- GitHub Actions artifact (auto-downloads)
+- Job summary with stats
+
+---
+
+## 🛠️ Command-Line Options
+
+```bash
+python3 crawler.py <URL> <output_directory>
+
+Arguments:
+  URL                 - Full URL to start crawling from
+                        Must be http:// or https://
+                        Example: https://example.com
+  
+  output_directory    - Where to save files
+                        Relative or absolute path
+                        Example: ./archives
+
+Example:
+  python3 crawler.py https://callmedley.com site_archive
+
+Limits:
+  - Max time: 1 hour
+  - Max size: 5 GB
+  - Rate: 2s/request, 500KB/s max
+  - Blocks: private IPs, localhost
 ```
 
 ---
 
-## 🔗 Architecture
+## 📚 Tech Stack
 
 ```
-ProfessionalArchiverV5_2
-├── WARCWriter
-│   ├── Generate WARC headers
-│   ├── Calculate SHA256 digest
-│   └── Write to .warc file
-├── RobotsChecker
-│   ├── Parse robots.txt
-│   ├── Check Disallow rules
-│   └── Respect Crawl-Delay
-├── Selenium (optional)
-│   ├── undetected-chromedriver
-│   ├── Cloudflare bypass
-│   └── JavaScript rendering
-├── Asset Extraction
-│   ├── Images (CSS srcset, OG, Twitter Card)
-│   ├── CSS (@import + external)
-│   ├── Fonts (@font-face)
-│   └── JavaScript (external src)
-├── Media Detection
-│   ├── Video tags
-│   ├── Audio tags
-│   └── IFrame tags
-└── Database (SQLite)
-    ├── CDX indexing
-    ├── Error logging
-    └── Asset metadata
+Core:
+  ✓ Python 3.11+
+  ✓ wget (system utility)
+  ✓ Standard library only (no pip packages)
+
+GitHub Actions:
+  ✓ Ubuntu 24.04
+  ✓ Python 3.11
+  ✓ Artifact storage (30 days)
 ```
 
 ---
 
-## 🛰 Version History
+## ❌ Error Handling
 
-| Version | Date | Status | Features |
-|---------|------|--------|----------|
-| v4 | 2025-12-16 | ⚠️ Deprecated | Basic YAML, crawling |
-| v5 | 2025-12-16 | ⚠️ Deprecated | Selenium, Cloudflare |
-| v5.1 | 2025-12-16 | ⚠️ Deprecated | Full asset extraction |
-| **v5.2** | **2025-12-16** | **✅ CURRENT** | **WARC + robots.txt + media** |
+### Common Issues
+
+**Issue:** Archive is empty
+```
+❌ ERROR: Archive directory '$ARCHIVE_PATH' is empty
+```
+**Cause:** wget didn't download anything  
+**Solution:** Check if site exists, firewall blocks, or uses JavaScript
+
+**Issue:** Download timeout
+```
+❌ ERROR: Download exceeded 3600s timeout
+```
+**Cause:** Site too large or server too slow  
+**Solution:** Try smaller domain subset or increase `SUBPROCESS_TIMEOUT`
+
+**Issue:** URL validation failed
+```
+❌ URL validation failed: Private IP not allowed: 192.168.1.1
+```
+**Cause:** Trying to crawl internal/private network  
+**Solution:** Only public websites allowed
 
 ---
 
-## 🚀 Improvements (v5.1 → v5.2)
+## 🔍 Debugging
 
-### Compliance
-- 🔝 v5.1 score: 85.75/100
-- 🔝 v5.2 score: 98/100 ✅ (+12.25 points)
-
-### New Components
-- ✅ WARCWriter class (ISO 28500:2017)
-- ✅ RobotsChecker class (RFC 9309)
-- ✅ Media detection methods
-- ✅ `media` table in database
-- ✅ WARC record ID generation
-
-### Database Enhancements
-- ✅ WARC reference tracking
-- ✅ robots.txt compliance flag
-- ✅ Media type classification
-- ✅ Better error logging
-
----
-
-## 🚭 What's NOT Included
-
-```
-❌ WARC compression (raw .warc files)
-❌ YouTube video download
-❌ Asset optimization (minification)
-❌ CDX file generation
-❌ WACZ packaging
+### Enable verbose logging
+```bash
+# Already enabled - shows all wget output
+python3 crawler.py https://example.com output
 ```
 
-**Next version (v5.3) will add these!**
-
----
-
-## 🔓 Security
-
-✅ **SSL/TLS enabled** - No MITM attacks  
-✅ **robots.txt respected** - Ethical crawling  
-✅ **No hardcoded secrets** - Uses environment vars  
-✅ **Input validation** - Safe URL parsing  
-✅ **SQL injection protected** - Parameterized queries  
-✅ **Selenium headless** - No browser GUI  
-
----
-
-## 🚀 GitHub Actions
-
-### Workflow: `archive_v5.2.yml`
-```
-Trigger: Manual dispatch or scheduled
-Inputs:
-  - Start URL
-  - Max pages
-  - Use Selenium (yes/no)
-
-Output:
-  - archive_{domain}.zip
-  - Retention: 90 days
-  - Size: ~125 MB
+### Check metadata
+```bash
+# After download, inspect manifest
+cat output/example.com/manifest.json | python3 -m json.tool
 ```
 
-### Usage
-```
-1. Go to Actions tab
-2. Select "Archive v5.2"
-3. Click "Run workflow"
-4. Enter URL + options
-5. Wait 3-5 minutes
-6. Download artifact
+### Test locally first
+```bash
+# Small site for testing
+python3 crawler.py https://example.com test_output
 ```
 
 ---
 
-## 📚 Documentation
+## 🐝 Contributing
 
-- [v5.2_IMPROVEMENTS.md](v5.2_IMPROVEMENTS.md) - Detailed changes
-- [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md) - Tracking
-- [.github/workflows/archive_v5.2.yml](.github/workflows/archive_v5.2.yml) - Automation
-
----
-
-## 🛠️ Tech Stack
-
-```
-Python 3.11+
-├── aiohttp 3.9 (async HTTP)
-├── beautifulsoup4 4.12 (HTML parsing)
-├── lxml 4.9 (XML/HTML)
-├── selenium 4.15 (browser automation)
-├── undetected-chromedriver 3.5 (Cloudflare bypass)
-├── warcio 1.7 (WARC generation)
-└── sqlite3 (built-in, indexing)
-
-GitHub Actions
-├── Ubuntu 24.04 runner
-├── Python 3.11
-└── Artifact storage
-```
-
----
-
-## 👍 Contributing
-
-Fork → Branch → Commit → PR
-
-Ideas:
-- [ ] WARC compression
-- [ ] YouTube-dl integration
-- [ ] Asset optimization
-- [ ] Dashboard UI
-- [ ] Sitemap extraction
+Ideas for improvements:
+- [ ] Selenium support for JavaScript-heavy sites
+- [ ] Compression (GZIP for archive)
+- [ ] Sitemap generation
+- [ ] Link extraction report
+- [ ] Filtering (include/exclude patterns)
 
 ---
 
@@ -366,20 +331,17 @@ MIT License - Free for personal and commercial use
 
 ---
 
-## 📊 Status Summary
+## 📊 Status
 
 ```
-✅ Compliance:     98/100 (ISO 28500:2017 + RFC 9309)
-✅ Production:     READY 🚀
-✅ Error Rate:     0%
-✅ Archive Size:   126.3 MB (callmedley.com)
-✅ Pages Crawled:  384
-✅ Assets:         2000+
-✅ WARC Records:   384
-✅ Performance:    3-5 min crawl time
-✅ Maintenance:    Active
+✅ Functionality:     COMPLETE
+✅ Security:         HARDENED
+✅ Reliability:      PRODUCTION READY
+✅ Error Handling:   EXPLICIT
+✅ Testing:          TODO (contributions welcome)
+✅ Documentation:    CURRENT
 ```
 
 ---
 
-**Built for professionals. Used by archivists. Trusted by enterprises.** 👋
+**Built for professionals. Reliable. Simple. Secure.** 🙋
