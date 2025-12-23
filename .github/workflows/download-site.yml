@@ -5,8 +5,9 @@ on:
     inputs:
       url:
         description: 'Website URL to download'
-        required: true
+        required: false
         type: string
+        default: 'https://callmedley.com'
       output_dir:
         description: 'Output directory (default: site_archive)'
         required: false
