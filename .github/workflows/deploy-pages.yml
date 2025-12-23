@@ -124,7 +124,7 @@ jobs:
 
       - name: Checkout target repository
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         run: |
           set -e
           
@@ -266,7 +266,7 @@ jobs:
       - name: Commit and push to gh-pages
         id: commit
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         run: |
           cd /tmp/target-repo
           
