@@ -259,7 +259,7 @@ jobs:
           echo "   Files: $FINAL_FILES"
           echo "   Size: $FINAL_SIZE"
 
-      - name: Move index.html to root - PRIMARY LOCATION
+      - name: Move index.html to root and remove pages folder
         run: |
           cd /tmp/target-repo
           
@@ -272,10 +272,11 @@ jobs:
           
           # Priority: pages/index.html → root
           if [ -f "pages/index.html" ]; then
-            echo "✅ Found pages/index.html - copying to root as PRIMARY"
+            echo "✅ Found pages/index.html - moving to root"
             cp pages/index.html index.html
+            rm -rf pages
+            echo "✅ Removed pages/ folder"
             ls -lah index.html
-            echo "✅ Root index.html created from pages/index.html"
           elif [ -f "index.html" ]; then
             echo "✅ index.html already in root"
             ls -lah index.html
@@ -409,7 +410,7 @@ jobs:
           | Domain | ${{ steps.extract.outputs.domain }} |
           | Files | ${{ steps.extract.outputs.file_count }} |
           | Size | ${{ steps.extract.outputs.size }} |
-          | Index Location | ROOT (index.html) |
+          | Index Location | ROOT (index.html in /) |
           | Pages URL | https://KomarovAI.github.io/archived-sites/ |
           EOF
 
