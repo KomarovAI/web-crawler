@@ -12,6 +12,26 @@ on:
         required: false
         type: string
         default: 'site_archive'
+      max_pages:
+        description: 'Maximum pages to crawl (optional, ignored in v2.1)'
+        required: false
+        type: string
+        default: '500'
+      use_selenium:
+        description: 'Use Selenium for JavaScript (optional, future feature)'
+        required: false
+        type: string
+        default: 'false'
+      ignore_robots:
+        description: 'Ignore robots.txt (optional, future feature)'
+        required: false
+        type: string
+        default: 'true'
+      resumeUrl:
+        description: 'n8n webhook callback URL (optional)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -66,6 +86,8 @@ jobs:
           echo "✅ Inputs validated:"
           echo "   URL: $URL"
           echo "   Output Directory: $SANITIZED_DIR"
+          echo ""
+          echo "Note: max_pages, use_selenium, ignore_robots are stored for future use"
 
       - name: Download website with wget
         run: |
@@ -128,3 +150,36 @@ jobs:
           echo "| **Artifact** | ${{ steps.validate.outputs.output_dir }}-${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Status**: Download successful ✅" >> $GITHUB_STEP_SUMMARY
+
+      - name: Send n8n callback (if provided)
+        if: always() && github.event.inputs.resumeUrl != ''
+        run: |
+          RESUME_URL="${{ github.event.inputs.resumeUrl }}"
+          JOB_STATUS="${{ job.status }}"
+          RUN_ID="${{ github.run_id }}"
+          DOMAIN="${{ steps.validate.outputs.url }}"
+          
+          if [ -n "$RESUME_URL" ]; then
+            echo "📡 Sending callback to n8n: $RESUME_URL"
+            
+            PAYLOAD=$(cat <<EOF
+{
+  "status": "$JOB_STATUS",
+  "run_id": "$RUN_ID",
+  "domain": "$DOMAIN",
+  "artifact_name": "${{ steps.validate.outputs.output_dir }}-$RUN_ID",
+  "file_count": "${{ steps.verify.outputs.file_count }}",
+  "size_mb": "${{ steps.verify.outputs.dir_size }}",
+  "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+}
+EOF
+            )
+            
+            curl -X POST "$RESUME_URL" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              --retry 3 \
+              --retry-delay 5 \
+              -w "\n✅ Callback sent (HTTP %{http_code})\n" \
+              || echo "⚠️ Callback failed (non-critical)"
+          fi
