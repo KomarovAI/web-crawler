@@ -1,9 +1,6 @@
 name: Download Website Archive
 
 on:
-  push:
-    paths:
-      - '.github/workflows/download-site.yml'
   workflow_dispatch:
     inputs:
       url:
@@ -30,7 +27,6 @@ jobs:
   download:
     name: Download Website Archive
     runs-on: ubuntu-24.04
-    if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       actions: read
@@ -49,9 +45,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq wget
-          pip install -q requests beautifulsoup4 selenium
+          sudo apt-get update
+          sudo apt-get install -y wget
+          pip install requests beautifulsoup4 selenium
 
       - name: Validate inputs
         id: validate
@@ -75,12 +71,12 @@ jobs:
           # Get level description
           case $INPUT_DEPTH in
             1) LEVEL_DESC="homepage only" ;;
-            2) LEVEL_DESC="+direct children" ;;
+            2) LEVEL_DESC="+children" ;;
             3) LEVEL_DESC="+2 levels" ;;
             4) LEVEL_DESC="very deep" ;;
           esac
 
-          # Sanitize directory name
+          # Sanitize directory
           SANITIZED_DIR=$(echo "$INPUT_OUTPUT" | tr -cd '[:alnum:]_-')
           SANITIZED_DIR=${SANITIZED_DIR:-site_archive}
 
@@ -88,23 +84,18 @@ jobs:
           echo "url=$INPUT_URL" >> $GITHUB_OUTPUT
           echo "depth_level=$INPUT_DEPTH" >> $GITHUB_OUTPUT
           echo "level_description=$LEVEL_DESC" >> $GITHUB_OUTPUT
-          echo "✅ Validated: $INPUT_URL (depth=$INPUT_DEPTH)"
+          echo "✅ OK: $INPUT_URL (depth=$INPUT_DEPTH)"
 
       - name: Download site
-        id: download
         env:
           URL: ${{ steps.validate.outputs.url }}
           OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
           DEPTH: ${{ steps.validate.outputs.depth_level }}
         run: |
           mkdir -p "$OUTPUT_DIR"
-          echo "⏳ Downloading: $URL (depth=$DEPTH)"
-          
-          wget --quiet --recursive --level="$DEPTH" --convert-links --page-requisites \
+          wget --recursive --level="$DEPTH" --convert-links --page-requisites \
             --adjust-extension --no-parent --directory-prefix="$OUTPUT_DIR" \
             --timeout=30 --tries=3 --user-agent="Mozilla/5.0" "$URL" || true
-          
-          echo "✅ Download complete"
 
       - name: Verify archive
         id: verify
@@ -112,17 +103,15 @@ jobs:
           OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
         run: |
           if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
-            echo "❌ Archive is empty or missing"
+            echo "❌ Archive failed"
             exit 1
           fi
 
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l)
           DIR_SIZE=$(du -sh "$OUTPUT_DIR" | cut -f1)
-
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
           echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
-          echo "✅ Verified: $FILE_COUNT files, $DIR_SIZE"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -134,34 +123,15 @@ jobs:
           if-no-files-found: warn
 
       - name: Send callback to N8N
-        if: always()
-        env:
-          RESUME_URL: ${{ github.event.inputs.resumeUrl }}
-          FILE_COUNT: ${{ steps.verify.outputs.file_count || '0' }}
-          DIR_SIZE: ${{ steps.verify.outputs.dir_size || '0' }}
-          URL: ${{ steps.validate.outputs.url }}
-          DEPTH_LEVEL: ${{ steps.validate.outputs.depth_level }}
-          STATUS: ${{ job.status }}
+        if: always() && github.event.inputs.resumeUrl
         run: |
-          [ -z "$RESUME_URL" ] && exit 0
-          
-          curl -s -X POST "$RESUME_URL" -H "Content-Type: application/json" \
+          curl -s -X POST "${{ github.event.inputs.resumeUrl }}" \
+            -H "Content-Type: application/json" \
             -d "{
-              \"status\": \"$STATUS\",
-              \"files_count\": $FILE_COUNT,
-              \"archive_size\": \"$DIR_SIZE\",
-              \"url\": \"$URL\",
-              \"depth_level\": $DEPTH_LEVEL,
+              \"status\": \"${{ job.status }}\",
+              \"files\": ${{ steps.verify.outputs.file_count || 0 }},
+              \"size\": \"${{ steps.verify.outputs.dir_size }}\",
+              \"url\": \"${{ steps.validate.outputs.url }}\",
+              \"depth\": ${{ steps.validate.outputs.depth_level }},
               \"run_id\": \"${{ github.run_id }}\"
             }" || true
-
-      - name: Create summary
-        if: always()
-        env:
-          URL: ${{ steps.validate.outputs.url }}
-          DEPTH: ${{ steps.validate.outputs.depth_level }}
-          DESC: ${{ steps.validate.outputs.level_description }}
-          COUNT: ${{ steps.verify.outputs.file_count || 'N/A' }}
-          SIZE: ${{ steps.verify.outputs.dir_size || 'N/A' }}
-          STATUS: ${{ job.status }}
-        run: echo "$STATUS: $COUNT files, $SIZE from $URL (depth=$DEPTH)" >> $GITHUB_STEP_SUMMARY
