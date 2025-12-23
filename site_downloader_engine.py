@@ -76,9 +76,10 @@ class SiteDownloaderEngine:
             logger.error("❌ Neither httrack nor wget found!")
             return None
     
-    async def download_with_httrack(self, url: str, output_dir: Path) -> dict:
+    async def download_with_httrack(self, url: str, output_dir: Path, max_pages: int = 100) -> dict:
         """🔥 Download site using httrack"""
         logger.info(f"🔥 Starting httrack download: {url}")
+        logger.info(f"📄 Max pages: {max_pages}")
         
         try:
             # Run httrack
@@ -88,7 +89,7 @@ class SiteDownloaderEngine:
                 '-O', str(output_dir),
                 '-%e',           # Save structure
                 '-k',            # Convert links
-                '-N100000',      # Max files
+                f'-N{max_pages}', # Max files limit
                 '--max-rate=0',  # No speed limit
                 '-c16',          # 16 threads
                 '--continue'     # Continue if interrupted
@@ -113,28 +114,46 @@ class SiteDownloaderEngine:
             logger.error(f"httrack error: {e}")
             return {'success': False, 'error': str(e)}
     
-    async def download_with_wget(self, url: str, output_dir: Path) -> dict:
-        """⚡ Download site using wget"""
+    async def download_with_wget(self, url: str, output_dir: Path, max_pages: int = 100) -> dict:
+        """⚡ Download site using wget with strict quotas"""
         logger.info(f"⚡ Starting wget download: {url}")
+        logger.info(f"📄 Max pages: {max_pages}, strict quota: {max_pages * 500}KB")
         
         try:
             parsed = urlparse(url)
             domain = parsed.netloc
             
+            # Strict parameters:
+            # --level 1        = only child pages (1 level deep)
+            # --quota          = hard KB limit (assume avg 500KB per page)
+            # --reject-regex   = block video/media files BEFORE download
+            # --page-requisites = only grab CSS/JS/images ON CURRENT PAGE
+            # --no-parent      = don't crawl parent directories
+            # --wait           = delay between requests to avoid throttling
+            
             cmd = [
                 'wget',
-                '--mirror',
+                '--recursive',
+                '--level', '1',
                 '--page-requisites',
                 '--adjust-extension',
-                '--span-hosts',
                 '--convert-links',
                 '--restrict-file-names=windows',
                 f'--domains={domain}',
                 '--no-parent',
-                '--wait=0.5',
+                '--wait', '1',
+                '--random-wait',
+                '--timeout', '20',
+                '--tries', '2',
+                '--retry-connrefused',
+                f'--quota={max_pages * 500}K',  # STRICT: max_pages * 500KB
+                '--reject-regex', r'\.(webm|mp4|mov|avi|mpeg|mkv|flv|wmv|m4v|ts|mpg|3gp|vob|f4v|wav|mp3|aac|flac|opus)$',  # Block media
+                '--user-agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
                 '-P', str(output_dir),
                 url
             ]
+            
+            logger.info(f"🔧 wget params: level=1, quota={max_pages * 500}K, page-requisites only, media rejected")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -144,9 +163,11 @@ class SiteDownloaderEngine:
             
             stdout, stderr = await process.communicate()
             
-            if process.returncode != 0:
-                logger.error(f"wget failed: {stderr.decode()}")
-                return {'success': False, 'error': stderr.decode()}
+            if process.returncode not in [0, 8]:  # 0=OK, 8=server errors (acceptable)
+                logger.warning(f"wget returncode: {process.returncode}")
+                if process.returncode > 8:
+                    logger.error(f"wget failed: {stderr.decode()}")
+                    return {'success': False, 'error': stderr.decode()}
             
             logger.info("✅ wget download complete")
             return {'success': True, 'output_dir': str(output_dir)}
@@ -155,9 +176,15 @@ class SiteDownloaderEngine:
             logger.error(f"wget error: {e}")
             return {'success': False, 'error': str(e)}
     
-    async def download_site(self, url: str) -> dict:
+    async def download_site(self, url: str, max_pages: int = 100) -> dict:
         """🔥 Download full website and save to DB"""
         logger.info(f"🔥 STARTING FULL WEBSITE DOWNLOAD: {url}")
+        logger.info(f"⚙️  Config: max_pages={max_pages}")
+        
+        # Validate max_pages
+        if not isinstance(max_pages, int) or max_pages < 1 or max_pages > 500:
+            logger.error(f"❌ Invalid max_pages: {max_pages}. Must be 1-500")
+            return {'success': False, 'error': 'max_pages must be 1-500'}
         
         # Check available tools
         tool = self.check_tools()
@@ -172,9 +199,9 @@ class SiteDownloaderEngine:
         
         # Download based on available tool
         if tool == 'httrack':
-            result = await self.download_with_httrack(url, temp_dir)
+            result = await self.download_with_httrack(url, temp_dir, max_pages)
         else:
-            result = await self.download_with_wget(url, temp_dir)
+            result = await self.download_with_wget(url, temp_dir, max_pages)
         
         if not result['success']:
             return result
@@ -209,7 +236,8 @@ class SiteDownloaderEngine:
             'success': True,
             'tool': tool,
             'files_processed': files_processed,
-            'url': url
+            'url': url,
+            'max_pages': max_pages
         }
     
     async def _process_and_save_files(self, base_dir: Path, start_url: str) -> int:
@@ -311,12 +339,13 @@ if __name__ == '__main__':
     import sys
     
     url = sys.argv[1] if len(sys.argv) > 1 else 'https://example.com'
+    max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else 100
     domain = urlparse(url).netloc
     
     conn = sqlite3.connect('archive.db')
     downloader = SiteDownloaderEngine(conn, domain)
     
-    result = asyncio.run(downloader.download_site(url))
+    result = asyncio.run(downloader.download_site(url, max_pages))
     
     if result['success']:
         stats = downloader.get_stats()
@@ -326,6 +355,7 @@ if __name__ == '__main__':
         print(f"Total files: {stats['total_files']}")
         print(f"Total size: {stats['total_size_mb']:.2f} MB")
         print(f"By type: {stats['by_type']}")
+        print(f"Max pages limit: {result['max_pages']}")
         print("="*70)
     else:
         print(f"\n❌ Download failed: {result['error']}")
