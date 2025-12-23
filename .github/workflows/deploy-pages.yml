@@ -366,6 +366,24 @@ jobs:
           echo "has_changes=true" >> $GITHUB_OUTPUT
           echo "✅ Successfully deployed"
 
+      - name: Configure GitHub Pages to use gh-pages branch
+        env:
+          GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+        continue-on-error: true
+        run: |
+          echo "📝 Configuring GitHub Pages..."
+          
+          OWNER=$(echo "${{ steps.validate.outputs.target_repo }}" | cut -d/ -f1)
+          REPO=$(echo "${{ steps.validate.outputs.target_repo }}" | cut -d/ -f2)
+          
+          curl -X PATCH \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/pages" \
+            -d '{"source": {"branch": "gh-pages", "path": "/"}}' \
+            -w "\n✅ GitHub Pages configured (HTTP %{http_code})\n" \
+            --retry 3 --retry-delay 2
+
       - name: Create summary
         if: always()
         run: |
