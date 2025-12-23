@@ -181,3 +181,35 @@ jobs:
           else
             echo "| **Status** | ⚠️ Completed with warnings |" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Resume n8n execution (dispatchAndWait callback)
+        if: always() && github.event.inputs.resumeUrl != ''
+        run: |
+          RESUME_URL="${{ github.event.inputs.resumeUrl }}"
+          FILE_COUNT="${{ steps.verify.outputs.file_count }}"
+          DIR_SIZE="${{ steps.verify.outputs.dir_size }}"
+          STATUS="success"
+          
+          if [ -z "$FILE_COUNT" ]; then
+            STATUS="failed"
+            FILE_COUNT="0"
+            DIR_SIZE="0"
+          fi
+          
+          echo ""
+          echo "📡 Sending callback to n8n: $RESUME_URL"
+          echo "   Status: $STATUS"
+          echo "   Files: $FILE_COUNT"
+          echo "   Size: $DIR_SIZE"
+          echo ""
+          
+          curl -X POST "$RESUME_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"status\": \"$STATUS\",
+              \"files_count\": $FILE_COUNT,
+              \"archive_size\": \"$DIR_SIZE\",
+              \"url\": \"${{ steps.validate.outputs.url }}\",
+              \"run_id\": \"${{ github.run_id }}\"
+            }" \
+            -v || echo "⚠️ Failed to send callback, but workflow completed"
