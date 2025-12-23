@@ -93,9 +93,21 @@ jobs:
           DEPTH: ${{ steps.validate.outputs.depth_level }}
         run: |
           mkdir -p "$OUTPUT_DIR"
+          # Reject URLs with query parameters (? character)
+          # These cause GitHub artifact upload failures
           wget --recursive --level="$DEPTH" --convert-links --page-requisites \
             --adjust-extension --no-parent --directory-prefix="$OUTPUT_DIR" \
-            --timeout=30 --tries=3 --user-agent="Mozilla/5.0" "$URL" || true
+            --timeout=30 --tries=3 --user-agent="Mozilla/5.0" \
+            --reject='*?*' \
+            "$URL" || true
+
+      - name: Clean up problematic files
+        env:
+          OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
+        run: |
+          # Remove files with ? in name (GitHub artifact incompatible)
+          find "$OUTPUT_DIR" -type f -name '*?*' -delete 2>/dev/null || true
+          echo "✅ Cleaned up invalid filenames"
 
       - name: Verify archive
         id: verify
@@ -112,6 +124,7 @@ jobs:
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
           echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
+          echo "✅ Verified: $FILE_COUNT files, $DIR_SIZE"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
