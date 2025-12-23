@@ -1,92 +1,83 @@
-name: Download Site with Wget
+name: Download Website Archive
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Website URL to download'
+        description: 'Website URL to download (e.g., https://example.com)'
         required: false
-        type: string
         default: 'https://callmedley.com'
-      output_dir:
-        description: 'Output directory (default: site_archive)'
-        required: false
         type: string
-        default: 'site_archive'
       depth_level:
-        description: 'Crawl depth: 1=start, 2=start+children (recommended), 3=deeper, 4=very deep'
+        description: 'Crawl depth: 1=homepage, 2=+children (default), 3=+grandchildren, 4=very deep'
         required: false
-        type: string
         default: '2'
+        type: string
+      output_dir:
+        description: 'Output directory name (no special chars)'
+        required: false
+        default: 'site_archive'
+        type: string
       resumeUrl:
-        description: 'Resume URL (n8n dispatchAndWait internal)'
+        description: 'N8N webhook URL for callback (auto-filled by N8N)'
         required: false
         type: string
-        default: ''
-
-permissions:
-  contents: read
-  actions: read
 
 jobs:
-  download-site:
+  download:
     name: Download Website Archive
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
 
     steps:
-      - name: Checkout repository (LATEST)
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install wget
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget
-          wget --version | head -1
-
-      - name: Setup Python 3.11
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Validate and prepare inputs
-        id: validate
+      - name: Install dependencies
         run: |
-          URL="{{ github.event.inputs.url }}"
-          OUTPUT_DIR="{{ github.event.inputs.output_dir }}"
-          DEPTH_LEVEL="{{ github.event.inputs.depth_level }}"
-          
-          # Apply defaults
-          URL=${URL:-"https://callmedley.com"}
-          OUTPUT_DIR=${OUTPUT_DIR:-"site_archive"}
-          DEPTH_LEVEL=${DEPTH_LEVEL:-"2"}
-          
+          sudo apt-get update
+          sudo apt-get install -y wget
+          pip install requests beautifulsoup4 selenium
+
+      - name: Validate inputs
+        id: validate
+        env:
+          INPUT_URL: ${{ github.event.inputs.url || 'https://callmedley.com' }}
+          INPUT_DEPTH: ${{ github.event.inputs.depth_level || '2' }}
+          INPUT_OUTPUT: ${{ github.event.inputs.output_dir || 'site_archive' }}
+        run: |
           echo ""
           echo "📋 Parsed inputs:"
-          echo "   URL: $URL"
-          echo "   Output Dir: $OUTPUT_DIR"
-          echo "   Depth Level: $DEPTH_LEVEL"
+          echo "   URL: $INPUT_URL"
+          echo "   Output Dir: $INPUT_OUTPUT"
+          echo "   Depth Level: $INPUT_DEPTH"
           echo ""
-          
+
           # Validate URL
-          if [[ ! "$URL" =~ ^https?:// ]]; then
+          if [[ ! "$INPUT_URL" =~ ^https?:// ]]; then
             echo "❌ ERROR: URL must start with http:// or https://"
-            echo "Got: $URL"
+            echo "Got: $INPUT_URL"
             exit 1
           fi
-          
+
           # Validate depth_level (CRITICAL)
-          if ! [[ "$DEPTH_LEVEL" =~ ^[0-9]+$ ]]; then
-            echo "❌ ERROR: depth_level must be numeric, got \"$DEPTH_LEVEL\""
+          if ! [[ "$INPUT_DEPTH" =~ ^[0-9]+$ ]]; then
+            echo "❌ ERROR: depth_level must be numeric, got \"$INPUT_DEPTH\""
             exit 1
           fi
-          
-          if (( DEPTH_LEVEL < 1 )) || (( DEPTH_LEVEL > 4 )); then
-            echo "❌ ERROR: depth_level must be 1-4, got $DEPTH_LEVEL"
+
+          if (( INPUT_DEPTH < 1 )) || (( INPUT_DEPTH > 4 )); then
+            echo "❌ ERROR: depth_level must be 1-4, got $INPUT_DEPTH"
             echo ""
             echo "Levels:"
             echo "  1 = Start page only (fastest)"
@@ -95,79 +86,97 @@ jobs:
             echo "  4 = Very deep crawl (be careful!)"
             exit 1
           fi
-          
+
           # Get level description
-          case $DEPTH_LEVEL in
+          case $INPUT_DEPTH in
             1) LEVEL_DESC="Start page only (fastest)" ;;
             2) LEVEL_DESC="Start + direct children (recommended)" ;;
             3) LEVEL_DESC="Start + 2 levels deep" ;;
             4) LEVEL_DESC="Very deep crawl (slow, be careful!)" ;;
           esac
-          
+
           # Sanitize directory name
-          SANITIZED_DIR=$(echo "$OUTPUT_DIR" | tr -cd '[:alnum:]_-')
+          SANITIZED_DIR=$(echo "$INPUT_OUTPUT" | tr -cd '[:alnum:]_-')
           if [ -z "$SANITIZED_DIR" ]; then
             SANITIZED_DIR="site_archive"
           fi
-          
-          echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
-          echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "depth_level=$DEPTH_LEVEL" >> $GITHUB_OUTPUT
-          echo "level_description=$LEVEL_DESC" >> $GITHUB_OUTPUT
-          
-          echo "✅ Validation PASSED"
-          echo "   URL: $URL"
-          echo "   Output Dir: $SANITIZED_DIR"
-          echo "   Depth Level: $DEPTH_LEVEL ($LEVEL_DESC)"
 
-      - name: Download website (with depth_level)
+          # Output for next steps
+          echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
+          echo "url=$INPUT_URL" >> $GITHUB_OUTPUT
+          echo "depth_level=$INPUT_DEPTH" >> $GITHUB_OUTPUT
+          echo "level_description=$LEVEL_DESC" >> $GITHUB_OUTPUT
+
+          echo "✅ Validation PASSED"
+          echo "   URL: $INPUT_URL"
+          echo "   Output Dir: $SANITIZED_DIR"
+          echo "   Depth Level: $INPUT_DEPTH ($LEVEL_DESC)"
+
+      - name: Download site with wget
         id: download
+        env:
+          URL: ${{ steps.validate.outputs.url }}
+          OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
+          DEPTH: ${{ steps.validate.outputs.depth_level }}
         run: |
           echo ""
-          echo "🚀 Starting crawler with parameters:"
-          echo "   URL: ${{ steps.validate.outputs.url }}"
-          echo "   Output Dir: ${{ steps.validate.outputs.output_dir }}"
-          echo "   Depth Level: ${{ steps.validate.outputs.depth_level }}"
-          echo "   Description: ${{ steps.validate.outputs.level_description }}"
+          echo "🌐 Starting site download..."
+          echo "   URL: $URL"
+          echo "   Depth Level: $DEPTH"
+          echo "   Output Dir: $OUTPUT_DIR"
           echo ""
-          
-          python3 crawler.py \
-            "${{ steps.validate.outputs.url }}" \
-            "${{ steps.validate.outputs.output_dir }}" \
-            "${{ steps.validate.outputs.depth_level }}"
+
+          # Create output directory
+          mkdir -p "$OUTPUT_DIR"
+
+          # Download with wget
+          # -r = recursive, -l = level depth, -k = convert links, -p = page requisites
+          # -E = add .html extension, --no-parent = don't go up directory
+          wget \
+            --recursive \
+            --level="$DEPTH" \
+            --convert-links \
+            --page-requisites \
+            --adjust-extension \
+            --no-parent \
+            --directory-prefix="$OUTPUT_DIR" \
+            --continue \
+            --timeout=30 \
+            --tries=3 \
+            --user-agent="Mozilla/5.0 (X11; Linux x86_64)" \
+            "$URL" || true  # Don't fail on wget errors
+
+          echo "✅ Download completed (or partially completed)"
 
       - name: Verify archive
         id: verify
-        if: always()
+        env:
+          OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
         run: |
-          OUTPUT_DIR="{{ steps.validate.outputs.output_dir }}"
-          DOMAIN=$(echo "${{ steps.validate.outputs.url }}" | sed -E 's|^https?://||' | sed -E 's|/.*||')
-          ARCHIVE_PATH="$OUTPUT_DIR/$DOMAIN"
-          
           echo ""
-          echo "🔍 Verifying archive at: $ARCHIVE_PATH"
-          
-          if [ ! -d "$ARCHIVE_PATH" ]; then
-            echo "⚠️ WARNING: Archive directory not found at $ARCHIVE_PATH"
+          echo "🔍 Verifying archive at: $OUTPUT_DIR"
+
+          if [ ! -d "$OUTPUT_DIR" ]; then
+            echo "❌ ERROR: Output directory not found"
+            exit 1
+          fi
+
+          if [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
+            echo "⚠️ WARNING: Output directory is empty"
             echo "Listing $OUTPUT_DIR:"
-            ls -la "$OUTPUT_DIR" 2>/dev/null || echo "Directory doesn't exist"
+            ls -la "$OUTPUT_DIR"
             exit 1
           fi
-          
-          if [ -z "$(ls -A "$ARCHIVE_PATH" 2>/dev/null)" ]; then
-            echo "❌ ERROR: Archive directory is empty"
-            exit 1
-          fi
-          
-          FILE_COUNT=$(find "$ARCHIVE_PATH" -type f | wc -l)
-          DIR_SIZE=$(du -sh "$ARCHIVE_PATH" | cut -f1)
-          
+
+          FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l)
+          DIR_SIZE=$(du -sh "$OUTPUT_DIR" | cut -f1)
+
           echo "✅ Archive verified:"
           echo "   Files: $FILE_COUNT"
           echo "   Size: $DIR_SIZE"
           echo ""
-          
-          echo "upload_path=$ARCHIVE_PATH" >> $GITHUB_OUTPUT
+
+          echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
 
@@ -178,55 +187,61 @@ jobs:
           name: ${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}
           path: ${{ steps.verify.outputs.upload_path }}
           retention-days: 30
-          compression-level: 6
           if-no-files-found: warn
 
-      - name: Create summary
+      - name: Send callback to N8N
         if: always()
+        env:
+          RESUME_URL: ${{ github.event.inputs.resumeUrl }}
+          FILE_COUNT: ${{ steps.verify.outputs.file_count || '0' }}
+          DIR_SIZE: ${{ steps.verify.outputs.dir_size || '0' }}
+          URL: ${{ steps.validate.outputs.url }}
+          DEPTH_LEVEL: ${{ steps.validate.outputs.depth_level }}
+          RUN_ID: ${{ github.run_id }}
+          STATUS: ${{ job.status }}
         run: |
-          echo "## ✅ Download Site Workflow" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **URL** | ${{ steps.validate.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Depth Level** | ${{ steps.validate.outputs.depth_level }} - ${{ steps.validate.outputs.level_description }} |" >> $GITHUB_STEP_SUMMARY
-          if [ -n "${{ steps.verify.outputs.file_count }}" ]; then
-            echo "| **Files Downloaded** | ${{ steps.verify.outputs.file_count }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| **Archive Size** | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| **Status** | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| **Status** | ⚠️ Completed with warnings |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Resume n8n execution (dispatchAndWait callback)
-        if: always() && github.event.inputs.resumeUrl != ''
-        run: |
-          RESUME_URL="{{ github.event.inputs.resumeUrl }}"
-          FILE_COUNT="{{ steps.verify.outputs.file_count }}"
-          DIR_SIZE="{{ steps.verify.outputs.dir_size }}"
-          STATUS="success"
-          
-          if [ -z "$FILE_COUNT" ]; then
-            STATUS="failed"
-            FILE_COUNT="0"
-            DIR_SIZE="0"
-          fi
-          
           echo ""
-          echo "📡 Sending callback to n8n: $RESUME_URL"
+          echo "📡 Sending callback to N8N..."
+          echo "   Resume URL: $RESUME_URL"
           echo "   Status: $STATUS"
           echo "   Files: $FILE_COUNT"
           echo "   Size: $DIR_SIZE"
           echo ""
-          
+
+          if [ -z "$RESUME_URL" ] || [ "$RESUME_URL" == "" ]; then
+            echo "⚠️ No resume URL provided, skipping callback"
+            exit 0
+          fi
+
+          # Send callback with curl
           curl -X POST "$RESUME_URL" \
             -H "Content-Type: application/json" \
             -d "{
               \"status\": \"$STATUS\",
               \"files_count\": $FILE_COUNT,
               \"archive_size\": \"$DIR_SIZE\",
-              \"url\": \"${{ steps.validate.outputs.url }}\",
-              \"depth_level\": ${{ steps.validate.outputs.depth_level }},
-              \"run_id\": \"${{ github.run_id }}\"
+              \"url\": \"$URL\",
+              \"depth_level\": $DEPTH_LEVEL,
+              \"run_id\": \"$RUN_ID\"
             }" \
             -v || echo "⚠️ Failed to send callback, but workflow completed"
+
+      - name: Create summary
+        if: always()
+        env:
+          URL: ${{ steps.validate.outputs.url }}
+          DEPTH: ${{ steps.validate.outputs.depth_level }}
+          DESC: ${{ steps.validate.outputs.level_description }}
+          FILE_COUNT: ${{ steps.verify.outputs.file_count || 'N/A' }}
+          DIR_SIZE: ${{ steps.verify.outputs.dir_size || 'N/A' }}
+          STATUS: ${{ job.status }}
+        run: |
+          echo "## ✅ Download Site Workflow" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | $URL |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Depth Level** | $DEPTH - $DESC |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Files Downloaded** | $FILE_COUNT |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Archive Size** | $DIR_SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | $STATUS |" >> $GITHUB_STEP_SUMMARY
