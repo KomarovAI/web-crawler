@@ -259,6 +259,19 @@ jobs:
           echo "   Files: $FINAL_FILES"
           echo "   Size: $FINAL_SIZE"
 
+      - name: Create root index.html for GitHub Pages
+        run: |
+          cd /tmp/target-repo
+          
+          # Check if pages/index.html exists
+          if [ -f "pages/index.html" ]; then
+            echo "📄 Creating root index.html from pages/index.html"
+            cp pages/index.html index.html
+            echo "✅ Root index.html created"
+          else
+            echo "⚠️  pages/index.html not found - skipping root index creation"
+          fi
+
       - name: Clean WARC files
         if: github.event.inputs.clean_warc == 'true'
         run: |
