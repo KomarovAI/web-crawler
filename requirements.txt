@@ -1,7 +1,2 @@
-aiohttp==3.9.1
-beautifulsoup4==4.12.2
-python-dotenv==1.0.0
-lxml==4.9.3
-selenium==4.15.2
-undetected-chromedriver==3.5.4
-warcio==1.7.4
+# No external dependencies required for wget-based crawler
+# Uses Python 3.11 stdlib + system wget utility
