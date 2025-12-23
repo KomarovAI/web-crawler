@@ -20,7 +20,7 @@ on:
         description: 'Target repository for Pages (owner/repo)'
         required: true
         type: string
-        default: 'KomarovAI/web-crawler-pages'
+        default: 'KomarovAI/archived-sites'
       clean_warc:
         description: 'Remove WARC/WARC.gz files (GitHub 100MB limit)'
         required: false
@@ -76,129 +76,134 @@ jobs:
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo "✅ Validation passed"
 
-      - name: Checkout source repo (for scripts)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download artifact
+      - name: Download artifact from source workflow
         uses: actions/download-artifact@v4
         with:
-          name: ${{ steps.validate.outputs.artifact_name }}
+          name: ${{ github.event.inputs.artifact_name }}
           path: ./artifact-download
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.validate.outputs.source_run_id }}
+          run-id: ${{ github.event.inputs.source_run_id }}
 
       - name: Extract and verify archive
         id: extract
         run: |
-          cd ./artifact-download
+          set -e
           
-          ARCHIVE_DIR=$(find . -maxdepth 1 -name "archive_*" -type d | head -1)
+          echo "📁 Checking downloaded artifact..."
+          ls -la ./artifact-download/ | head -20
+          
+          # Find archive directory
+          ARCHIVE_DIR=$(find ./artifact-download -maxdepth 2 -name "archive_*" -type d | head -1)
+          
           if [ -z "$ARCHIVE_DIR" ]; then
-            echo "❌ Archive not found"
-            echo "📁 Contents:"
-            ls -la
+            echo "❌ Archive directory not found"
+            echo "📁 Directory structure:"
+            find ./artifact-download -type f -o -type d | head -30
             exit 1
           fi
           
-          DOMAIN=$(basename "$ARCHIVE_DIR" | sed 's/archive_//' | sed 's/_/./g')
+          echo "✅ Found archive: $ARCHIVE_DIR"
+          
+          # Extract domain from archive name
+          ARCHIVE_NAME=$(basename "$ARCHIVE_DIR")
+          DOMAIN=$(echo "$ARCHIVE_NAME" | sed 's/archive_//' | sed 's/_/./g')
           FILE_COUNT=$(find "$ARCHIVE_DIR" -type f | wc -l)
           SIZE=$(du -sh "$ARCHIVE_DIR" | cut -f1)
           
           echo "archive_dir=$ARCHIVE_DIR" >> $GITHUB_OUTPUT
+          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
           
-          echo "✅ Archive verified: $DOMAIN ($FILE_COUNT files, $SIZE)"
+          echo "✅ Archive verified:"
+          echo "   Domain: $DOMAIN"
+          echo "   Files: $FILE_COUNT"
+          echo "   Size: $SIZE"
 
-      - name: Format and initialize target repository
+      - name: Checkout target repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_REPO: ${{ steps.validate.outputs.target_repo }}
         run: |
           set -e
           
-          TEMP_DIR=$(mktemp -d)
-          cd "$TEMP_DIR"
+          TARGET_REPO="${{ steps.validate.outputs.target_repo }}"
+          TEMP_DIR="/tmp/target-repo"
           
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          echo "📂 Full repository format - destructive reset"
-          echo "📄 Cloning $TARGET_REPO"
-          
-          git clone "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . 2>&1 || {
-            echo "ℹ️  First deploy - initializing new repo"
-            git init
-            git remote add origin "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git"
-          }
-          
-          echo "🗑️  Cleaning repository - removing ALL content"
-          
-          # Remove ALL files except .git
-          find . -maxdepth 1 -type f -delete
-          find . -maxdepth 1 -type d ! -name '.git' -exec rm -rf {} + 2>/dev/null || true
-          
-          # Verify .git is still there
-          if [ ! -d ".git" ]; then
-            echo "⚠️  .git was removed, reinitializing"
-            git init
-            git remote add origin "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git"
-          fi
-          
-          echo "📄 Creating fresh gh-pages branch (orphan)"
-          
-          # Create orphan gh-pages branch
-          git checkout --orphan gh-pages 2>/dev/null || git checkout gh-pages
-          git rm -rf . 2>/dev/null || true
-          
-          echo "💾 Creating .nojekyll file"
-          touch .nojekyll
-          
-          git add .nojekyll
-          git commit -m "chore: Initialize gh-pages branch" || true
-          
-          echo "$TEMP_DIR" > /tmp/target_dir
-          echo "✅ Repository fully reset and ready for deployment"
-
-      - name: Deploy archive to clean repository
-        id: deploy
-        run: |
-          TEMP_DIR=$(cat /tmp/target_dir)
+          mkdir -p "$TEMP_DIR"
           cd "$TEMP_DIR"
           
-          echo "📁 Extracting archive to root"
-          ARCHIVE_PATH="$GITHUB_WORKSPACE/artifact-download/${{ steps.extract.outputs.archive_dir }}"
+          echo "📂 Cloning target repository: $TARGET_REPO"
           
-          # Copy all archive contents to root of target repo
-          cp -rv "$ARCHIVE_PATH"/* . 2>/dev/null || true
+          git clone "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . 2>&1 || {
+            echo "ℹ️  Repository doesn't exist or first deploy - initializing"
+            git init
+            git remote add origin "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" 2>/dev/null || true
+          }
           
-          # Ensure .nojekyll exists
+          echo "✅ Target repository ready"
+
+      - name: Format and initialize gh-pages branch
+        run: |
+          cd /tmp/target-repo
+          
+          echo "🗑️  Cleaning repository for fresh deployment"
+          git rm -rf . 2>/dev/null || true
+          
+          echo "📄 Creating orphan gh-pages branch"
+          git checkout --orphan gh-pages 2>/dev/null || git switch --create gh-pages 2>/dev/null || true
+          
+          # Ensure clean working directory
+          git reset --hard HEAD 2>/dev/null || true
+          rm -rf *
+          
+          # Create .nojekyll to skip Jekyll processing
           touch .nojekyll
+          git add .nojekyll
+          git commit -m "chore: Initialize gh-pages branch" --allow-empty
+          
+          echo "✅ Repository formatted and ready"
+
+      - name: Copy archive contents to target repo
+        run: |
+          set -e
+          
+          ARCHIVE_PATH="$GITHUB_WORKSPACE/${{ steps.extract.outputs.archive_dir }}"
+          TARGET_DIR="/tmp/target-repo"
+          
+          echo "📁 Copying archive from: $ARCHIVE_PATH"
+          echo "📁 To target directory: $TARGET_DIR"
+          
+          # Copy all contents (excluding git)
+          find "$ARCHIVE_PATH" -maxdepth 1 -type f -exec cp {} "$TARGET_DIR/" \;
+          find "$ARCHIVE_PATH" -maxdepth 1 -type d ! -name ".*" -exec cp -r {} "$TARGET_DIR/" \;
+          
+          echo "✅ Archive contents copied"
           
           # Count final files
-          FINAL_FILE_COUNT=$(find . -type f ! -path './.git*' | wc -l)
-          FINAL_SIZE=$(du -sh . | cut -f1)
+          FINAL_FILES=$(find "$TARGET_DIR" -type f ! -path './.git/*' | wc -l)
+          FINAL_SIZE=$(du -sh "$TARGET_DIR" | cut -f1)
           
-          echo "final_files=$FINAL_FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "final_files=$FINAL_FILES" >> $GITHUB_OUTPUT
           echo "final_size=$FINAL_SIZE" >> $GITHUB_OUTPUT
           
-          echo "✅ Archive deployed: $FINAL_FILE_COUNT files ($FINAL_SIZE)"
+          echo "📊 Final deployment:"
+          echo "   Files: $FINAL_FILES"
+          echo "   Size: $FINAL_SIZE"
 
       - name: Clean WARC files
         if: github.event.inputs.clean_warc == 'true'
         run: |
-          TEMP_DIR=$(cat /tmp/target_dir)
-          cd "$TEMP_DIR"
+          cd /tmp/target-repo
           
           echo "🧹 Scanning for WARC files"
-          WARC_COUNT=$(find . -name "*.warc" -o -name "*.warc.gz" | wc -l)
+          WARC_COUNT=$(find . -type f \( -name "*.warc" -o -name "*.warc.gz" \) | wc -l)
           
           if [ $WARC_COUNT -gt 0 ]; then
             echo "🗑️  Removing $WARC_COUNT WARC files"
-            find . -name "*.warc" -o -name "*.warc.gz" | xargs rm -f
+            find . -type f \( -name "*.warc" -o -name "*.warc.gz" \) -delete
             echo "✅ WARC files removed"
           else
             echo "✅ No WARC files found"
@@ -208,10 +213,10 @@ jobs:
         if: github.event.inputs.rewrite_links == 'true'
         continue-on-error: true
         run: |
-          TEMP_DIR=$(cat /tmp/target_dir)
-          cd "$TEMP_DIR"
+          cd /tmp/target-repo
           
-          echo "🔗 Rewriting URLs for domain: ${{ steps.extract.outputs.domain }}"
+          DOMAIN="${{ steps.extract.outputs.domain }}"
+          echo "🔗 Rewriting URLs for domain: $DOMAIN"
           
           python3 << 'PYTHON'
           import os
@@ -221,143 +226,80 @@ jobs:
           DOMAIN = "${{ steps.extract.outputs.domain }}"
           SAFE_DOMAIN = re.escape(DOMAIN)
           
-          # URL rewrite patterns - aggressive matching
+          # URL rewrite patterns
           patterns = [
-              # href URLs (quoted)
-              (rf'href=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
+              (rf'href=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\']',
                r'href="\1"'),
-              # src URLs
-              (rf'src=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
+              (rf'src=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\']',
                r'src="\1"'),
-              # action URLs (forms)
-              (rf'action=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
+              (rf'action=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\']',
                r'action="\1"'),
-              # srcset (images)
-              (rf'srcset=["\']https?://{SAFE_DOMAIN}([^"\']*)["\'']',
-               r'srcset="\1"'),
-              # data URLs
-              (rf'data=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\'']',
-               r'data="\1"'),
-              # Unquoted URLs in JavaScript
-              (rf'https?://{SAFE_DOMAIN}(/[a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)',
-               r'\1'),
           ]
           
-          # File extensions to process
-          PROCESS_EXTS = {'.html', '.htm', '.js', '.css', '.json', '.xml', '.svg'}
-          
-          modified_count = 0
-          error_count = 0
+          PROCESS_EXTS = {'.html', '.htm', '.js', '.css', '.json'}
+          modified = 0
           
           for root, dirs, files in os.walk('.'):
-              # Skip .git directory
               if '.git' in dirs:
                   dirs.remove('.git')
-              
               for file in files:
-                  ext = Path(file).suffix.lower()
-                  if ext in PROCESS_EXTS:
+                  if Path(file).suffix.lower() in PROCESS_EXTS:
                       filepath = os.path.join(root, file)
                       try:
                           with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                               original = f.read()
-                          
                           content = original
                           for pattern, replacement in patterns:
                               content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
-                          
                           if content != original:
                               with open(filepath, 'w', encoding='utf-8') as f:
                                   f.write(content)
-                              modified_count += 1
+                              modified += 1
                       except Exception as e:
-                          error_count += 1
-                          if error_count <= 5:
-                              print(f"⚠️  Error in {filepath}: {str(e)[:100]}")
+                          pass
           
-          print(f"✅ Rewrote {modified_count} files")
-          if error_count > 5:
-              print(f"⚠️  {error_count - 5} more errors (not shown)")
+          print(f"✅ Rewrote {modified} files")
           PYTHON
 
-      - name: Commit and force push to gh-pages
+      - name: Commit and push to gh-pages
         id: commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TEMP_DIR=$(cat /tmp/target_dir)
-          cd "$TEMP_DIR"
+          cd /tmp/target-repo
           
-          echo "📋 Staging changes"
+          echo "📋 Staging all changes"
           git add -A
           
-          # Check for changes
           if git diff --cached --quiet; then
-            echo "ℹ️  No changes to commit (empty archive?)"
+            echo "ℹ️  No changes to commit"
             echo "has_changes=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          DOMAIN="${{ steps.extract.outputs.domain }}"
-          SOURCE_RUN="${{ steps.validate.outputs.source_run_id }}"
-          
           echo "📝 Creating commit"
-          git commit -m "chore(pages): Deploy $DOMAIN from web-crawler" \
-                     -m "" \
-                     -m "Source Information:" \
-                     -m "  Run ID: $SOURCE_RUN" \
-                     -m "  Domain: $DOMAIN" \
-                     -m "  Deployment Run: ${{ github.run_id }}" \
-                     -m "" \
-                     -m "Archive Details:" \
-                     -m "  Files: ${{ steps.extract.outputs.file_count }}" \
-                     -m "  Size: ${{ steps.extract.outputs.size }}" \
-                     -m "" \
-                     -m "Deployment Details:" \
-                     -m "  Final Files: ${{ steps.deploy.outputs.final_files }}" \
-                     -m "  Final Size: ${{ steps.deploy.outputs.final_size }}" \
-                     -m "  Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git commit -m "chore(pages): Deploy ${{ steps.extract.outputs.domain }} (Run #${{ github.event.inputs.source_run_id }})" \
+                     -m "Files: ${{ steps.extract.outputs.file_count }} | Size: ${{ steps.extract.outputs.size }}"
           
-          echo "🚀 Force pushing to gh-pages (complete reset)"
+          echo "🚀 Force pushing to gh-pages"
           git push -u origin gh-pages --force
           
           echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "✅ Successfully deployed (full reset + push)"
+          echo "✅ Successfully deployed"
 
-      - name: Create GitHub Pages deployment summary
+      - name: Create summary
         if: always()
         run: |
           cat >> $GITHUB_STEP_SUMMARY <<'EOF'
-          ## 🚀 GitHub Pages Deployment Complete
+          ## ✅ GitHub Pages Deployment
           
-          ### Deployment Status
           | Property | Value |
           |----------|-------|
-          | **Status** | ${{ job.status }} |
-          | **Source Run** | ${{ steps.validate.outputs.source_run_id }} |
-          | **Target Repo** | ${{ steps.validate.outputs.target_repo }} |
-          | **Branch** | gh-pages |
-          | **Reset Type** | Full Format (Orphan Branch) |
-          
-          ### Archive Information
-          | Property | Value |
-          |----------|-------|
-          | **Domain** | ${{ steps.extract.outputs.domain }} |
-          | **Original Files** | ${{ steps.extract.outputs.file_count }} |
-          | **Original Size** | ${{ steps.extract.outputs.size }} |
-          | **Final Files** | ${{ steps.deploy.outputs.final_files }} |
-          | **Final Size** | ${{ steps.deploy.outputs.final_size }} |
-          | **Changes Committed** | ${{ steps.commit.outputs.has_changes }} |
-          
-          ### 📍 GitHub Pages URL
-          \`https://$(echo '${{ steps.validate.outputs.target_repo }}' | cut -d'/' -f1).github.io/$(echo '${{ steps.validate.outputs.target_repo }}' | cut -d'/' -f2)/\`
-          
-          ### Notes
-          - 🗑️ Repository fully formatted before deployment
-          - 🧹 WARC files cleaned
-          - 🔗 URLs rewritten to local paths
-          - 👑 Force pushed to gh-pages (clean history)
-          
+          | Status | ${{ job.status }} |
+          | Domain | ${{ steps.extract.outputs.domain }} |
+          | Files | ${{ steps.extract.outputs.file_count }} |
+          | Size | ${{ steps.extract.outputs.size }} |
+          | Pages URL | https://KomarovAI.github.io/archived-sites/ |
           EOF
 
       - name: Notify n8n on completion
@@ -365,43 +307,23 @@ jobs:
         continue-on-error: true
         run: |
           RESUME_URL="${{ github.event.inputs.resumeUrl }}"
+          [ -z "$RESUME_URL" ] && exit 0
           
-          if [ -z "$RESUME_URL" ]; then
-            echo "↩️  No resumeUrl provided"
-            exit 0
-          fi
-          
-          echo "📡 Sending callback to n8n..."
-          
-          OWNER=$(echo '${{ steps.validate.outputs.target_repo }}' | cut -d'/' -f1)
-          REPO=$(echo '${{ steps.validate.outputs.target_repo }}' | cut -d'/' -f2)
-          PAGES_URL="https://${OWNER}.github.io/${REPO}/"
-          
-          PAYLOAD=$(cat <<EOF
-          {
-            "status": "${{ job.status }}",
+          PAYLOAD=$(printf '{
+            "status": "%s",
             "workflow": "deploy-pages",
-            "run_id": ${{ github.run_id }},
-            "source_run_id": ${{ steps.validate.outputs.source_run_id }},
-            "target_repo": "${{ steps.validate.outputs.target_repo }}",
-            "domain": "${{ steps.extract.outputs.domain }}",
-            "original_files": "${{ steps.extract.outputs.file_count }}",
-            "original_size": "${{ steps.extract.outputs.size }}",
-            "final_files": "${{ steps.deploy.outputs.final_files }}",
-            "final_size": "${{ steps.deploy.outputs.final_size }}",
-            "pages_url": "${PAGES_URL}",
-            "reset_type": "full-format",
-            "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          }
-          EOF
-          )
+            "run_id": %s,
+            "source_run_id": %s,
+            "target_repo": "%s",
+            "domain": "%s",
+            "original_files": "%s",
+            "original_size": "%s",
+            "pages_url": "https://KomarovAI.github.io/archived-sites/",
+            "timestamp": "%s"
+          }' "${{ job.status }}" "${{ github.run_id }}" "${{ steps.validate.outputs.source_run_id }}" "${{ steps.validate.outputs.target_repo }}" "${{ steps.extract.outputs.domain }}" "${{ steps.extract.outputs.file_count }}" "${{ steps.extract.outputs.size }}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')")
           
           curl -k -X POST "$RESUME_URL" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            --retry 3 \
-            --retry-delay 5 \
-            --connect-timeout 10 \
-            --max-time 30 \
-            -w "\n✅ n8n callback sent (HTTP %{http_code})\n" \
-            || echo "⚠️  n8n callback failed (non-critical)"
+            --retry 3 --retry-delay 5 --connect-timeout 10 --max-time 30 \
+            -w "\n✅ Callback sent (HTTP %{http_code})\n" || echo "⚠️  Callback failed"
