@@ -207,23 +207,25 @@ jobs:
           RUN_ID="${{ github.run_id }}"
           DOMAIN="${{ steps.normalize.outputs.domain }}"
           MAX_PAGES="${{ steps.normalize.outputs.max_pages }}"
+          TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          ARTIFACT_NAME="site-archive-${{ github.run_id }}"
           
           if [ -n "$RESUME_URL" ]; then
             echo "📡 Sending callback to n8n..."
             
-            PAYLOAD=$(cat <<'EOF'
-          {
-            "status": "$JOB_STATUS",
-            "conclusion": "${{ job.status }}",
-            "run_id": $RUN_ID,
-            "workflow": "download-site",
-            "domain": "$DOMAIN",
-            "max_pages": "$MAX_PAGES",
-            "artifact_name": "site-archive-${{ github.run_id }}",
-            "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          }
-          EOF
-            )
+            # Use printf to properly escape JSON
+            PAYLOAD=$(printf '{
+              "status": "%s",
+              "conclusion": "%s",
+              "run_id": %s,
+              "workflow": "download-site",
+              "domain": "%s",
+              "max_pages": "%s",
+              "artifact_name": "%s",
+              "timestamp": "%s"
+            }' "$JOB_STATUS" "$JOB_STATUS" "$RUN_ID" "$DOMAIN" "$MAX_PAGES" "$ARTIFACT_NAME" "$TIMESTAMP")
+            
+            echo "Payload: $PAYLOAD"
             
             curl -k \
               -X POST "$RESUME_URL" \
