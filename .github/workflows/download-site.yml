@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Website URL to download (https://example.com)'
+        description: 'Website URL to download (https://example.com) or JSON with {url, output_dir, max_pages}'
         required: true
         type: string
       output_dir:
@@ -51,19 +51,31 @@ jobs:
         id: validate
         run: |
           # Get inputs
-          URL="${{ github.event.inputs.url }}"
+          URL_INPUT="${{ github.event.inputs.url }}"
           OUTPUT_DIR="${{ github.event.inputs.output_dir }}"
           MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          
+          # Try to parse as JSON (from n8n)
+          if [[ "$URL_INPUT" =~ ^\{ ]]; then
+            echo "📦 Detected JSON input from n8n, parsing..."
+            URL=$(echo "$URL_INPUT" | jq -r '.url // empty' 2>/dev/null || echo "")
+            OUTPUT_DIR=$(echo "$URL_INPUT" | jq -r '.output_dir // empty' 2>/dev/null || echo "")
+            MAX_PAGES=$(echo "$URL_INPUT" | jq -r '.max_pages // empty' 2>/dev/null || echo "")
+          else
+            URL="$URL_INPUT"
+          fi
           
           # Apply defaults
           URL=${URL:-"https://callmedley.com"}
           OUTPUT_DIR=${OUTPUT_DIR:-"site_archive"}
           MAX_PAGES=${MAX_PAGES:-"500"}
           
-          echo "\n✅ Raw inputs:"
+          echo ""
+          echo "✅ Raw inputs:"
           echo "   URL: $URL"
           echo "   Output Dir: $OUTPUT_DIR"
-          echo "   Max Pages: $MAX_PAGES\n"
+          echo "   Max Pages: $MAX_PAGES"
+          echo ""
           
           # Validate URL
           if [[ ! "$URL" =~ ^https?:// ]]; then
@@ -89,7 +101,8 @@ jobs:
           echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
           echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
           
-          echo "\n✅ Validated inputs:"
+          echo ""
+          echo "✅ Validated inputs:"
           echo "   URL: $URL"
           echo "   Output Dir: $SANITIZED_DIR"
           echo "   Max Pages: $MAX_PAGES (PASSED)"
@@ -97,7 +110,8 @@ jobs:
       - name: Download website (with max_pages)
         id: download
         run: |
-          echo "\n🚀 Starting crawler with parameters:"
+          echo ""
+          echo "🚀 Starting crawler with parameters:"
           echo "   URL: ${{ steps.validate.outputs.url }}"
           echo "   Output Dir: ${{ steps.validate.outputs.output_dir }}"
           echo "   Max Pages: ${{ steps.validate.outputs.max_pages }}"
@@ -116,7 +130,8 @@ jobs:
           DOMAIN=$(echo "${{ steps.validate.outputs.url }}" | sed -E 's|^https?://||' | sed -E 's|/.*||')
           ARCHIVE_PATH="$OUTPUT_DIR/$DOMAIN"
           
-          echo "\n🔍 Verifying archive at: $ARCHIVE_PATH"
+          echo ""
+          echo "🔍 Verifying archive at: $ARCHIVE_PATH"
           
           if [ ! -d "$ARCHIVE_PATH" ]; then
             echo "❌ ERROR: Archive directory missing: $ARCHIVE_PATH"
@@ -131,9 +146,11 @@ jobs:
           FILE_COUNT=$(find "$ARCHIVE_PATH" -type f | wc -l)
           DIR_SIZE=$(du -sh "$ARCHIVE_PATH" | cut -f1)
           
+          echo ""
           echo "✅ Archive verified:"
           echo "   Files: $FILE_COUNT"
           echo "   Size: $DIR_SIZE"
+          echo ""
           
           echo "upload_path=$ARCHIVE_PATH" >> $GITHUB_OUTPUT
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
