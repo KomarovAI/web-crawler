@@ -171,9 +171,16 @@ jobs:
           echo "📄 Creating fresh orphan gh-pages branch"
           git checkout --orphan gh-pages
           
-          # Clean everything
+          # Clean tracked files WITHOUT destroying .git
           git rm -rf . 2>/dev/null || true
-          rm -rf * .* 2>/dev/null || true
+          
+          # Remove untracked files (but preserve .git)
+          find . -maxdepth 1 \
+            -not -name '.git' \
+            -not -name '.' \
+            -not -name '..' \
+            \( -type f -o -type d \) \
+            -exec rm -rf {} + 2>/dev/null || true
           
           # Create .nojekyll to skip Jekyll processing
           touch .nojekyll
@@ -215,11 +222,11 @@ jobs:
           cd /tmp/target-repo
           
           echo "🧹 Scanning for WARC files"
-          WARC_COUNT=$(find . -type f \( -name "*.warc" -o -name "*.warc.gz" \) | wc -l)
+          WARC_COUNT=$(find . -type f \( -name "*.warc" -o -name "*.warc.gz" \) ! -path './.git/*' | wc -l)
           
           if [ $WARC_COUNT -gt 0 ]; then
             echo "🗑️  Removing $WARC_COUNT WARC files"
-            find . -type f \( -name "*.warc" -o -name "*.warc.gz" \) -delete
+            find . -type f \( -name "*.warc" -o -name "*.warc.gz" \) ! -path './.git/*' -delete
             echo "✅ WARC files removed"
           else
             echo "✅ No WARC files found"
