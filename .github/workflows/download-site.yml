@@ -1,6 +1,9 @@
 name: Download Website Archive
 
 on:
+  push:
+    paths:
+      - '.github/workflows/download-site.yml'
   workflow_dispatch:
     inputs:
       url:
@@ -27,6 +30,7 @@ jobs:
   download:
     name: Download Website Archive
     runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       actions: read
