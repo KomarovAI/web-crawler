@@ -26,7 +26,7 @@ on:
         description: 'Ignore robots.txt (true/false)'
         required: false
         type: string
-        default: 'false'
+        default: 'true'  # ← CHANGED: true by default
       target_repo:
         description: 'Target repository for upload (owner/repo)'
         required: false
@@ -94,7 +94,7 @@ jobs:
           URL=${URL:-"https://callmedley.com"}
           MAX_PAGES=${MAX_PAGES:-"100"}
           USE_SELENIUM=${USE_SELENIUM:-"true"}
-          IGNORE_ROBOTS=${IGNORE_ROBOTS:-"false"}
+          IGNORE_ROBOTS=${IGNORE_ROBOTS:-"true"}  # ← DEFAULT true NOW
           AUTO_DEPLOY=${AUTO_DEPLOY:-"false"}
           
           # Validate URL format
@@ -135,26 +135,11 @@ jobs:
       
       - name: Download site with smart_archiver_v4.py
         run: |
-          python3 << 'PYTHON'
-          url = '${{ steps.normalize.outputs.url }}'
-          max_pages = '${{ steps.normalize.outputs.max_pages }}'
-          domain = '${{ steps.normalize.outputs.domain }}'
+          echo "🔧 Running archiver with env vars..."
+          echo "USE_SELENIUM=${{ steps.normalize.outputs.use_selenium }}"
+          echo "IGNORE_ROBOTS=${{ steps.normalize.outputs.ignore_robots }}"
           
-          with open('.env', 'w') as f:
-              f.write(f"STARTURL={url}\n")
-              f.write(f"MAXPAGES={max_pages}\n")
-          
-          with open('domain.txt', 'w') as f:
-              f.write(domain)
-          
-          print(f"✅ Configuration written:")
-          print(f"   URL: {url}")
-          print(f"   Max Pages: {max_pages}")
-          print(f"   Domain: {domain}")
-          PYTHON
-          
-          source .env
-          python3 smart_archiver_v4.py "$STARTURL" "$MAXPAGES"
+          python3 smart_archiver_v4.py "${{ steps.normalize.outputs.url }}" "${{ steps.normalize.outputs.max_pages }}"
         env:
           USE_SELENIUM: ${{ steps.normalize.outputs.use_selenium }}
           IGNORE_ROBOTS: ${{ steps.normalize.outputs.ignore_robots }}
@@ -164,6 +149,7 @@ jobs:
           ARCHIVE_DIR=$(find . -maxdepth 1 -name "archive_*" -type d | head -1)
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Archive not found!"
+            ls -la
             exit 1
           fi
           
