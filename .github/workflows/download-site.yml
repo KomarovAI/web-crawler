@@ -4,16 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'JSON string: {"url":"https://example.com","output_dir":"site_archive","max_pages":"500"}'
+        description: 'Website URL to download'
         required: true
         type: string
       output_dir:
-        description: 'Output directory (IGNORED if JSON provided, default: site_archive)'
+        description: 'Output directory (default: site_archive)'
         required: false
         type: string
         default: 'site_archive'
       max_pages:
-        description: 'Max pages to crawl (IGNORED if JSON provided, default: 500)'
+        description: 'Max pages to crawl (1-5000, default: 500)'
         required: false
         type: string
         default: '500'
@@ -50,30 +50,9 @@ jobs:
       - name: Validate and prepare inputs
         id: validate
         run: |
-          URL_INPUT="${{ github.event.inputs.url }}"
+          URL="${{ github.event.inputs.url }}"
           OUTPUT_DIR="${{ github.event.inputs.output_dir }}"
           MAX_PAGES="${{ github.event.inputs.max_pages }}"
-          
-          echo "📥 Raw URL input:"
-          echo "$URL_INPUT"
-          echo ""
-          
-          # Try to parse as JSON (from n8n)
-          if echo "$URL_INPUT" | grep -qE '^\s*\{'; then
-            echo "✅ Detected JSON input from n8n"
-            URL=$(echo "$URL_INPUT" | jq -r '.url // empty' 2>/dev/null)
-            OUTPUT_DIR=$(echo "$URL_INPUT" | jq -r '.output_dir // .output_dir // empty' 2>/dev/null)
-            MAX_PAGES=$(echo "$URL_INPUT" | jq -r '.max_pages // .max_pages // empty' 2>/dev/null)
-            
-            if [ -z "$URL" ]; then
-              echo "❌ ERROR: JSON parsing failed or 'url' field missing"
-              echo "Attempted to parse: $URL_INPUT"
-              exit 1
-            fi
-          else
-            echo "ℹ️ Standard string input detected"
-            URL="$URL_INPUT"
-          fi
           
           # Apply defaults
           URL=${URL:-"https://callmedley.com"}
