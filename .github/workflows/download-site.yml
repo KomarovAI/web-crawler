@@ -4,16 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Website URL to download (https://example.com) or JSON with {url, output_dir, max_pages}'
+        description: 'JSON string: {"url":"https://example.com","output_dir":"site_archive","max_pages":"500"}'
         required: true
         type: string
       output_dir:
-        description: 'Output directory (default: site_archive)'
+        description: 'Output directory (IGNORED if JSON provided, default: site_archive)'
         required: false
         type: string
         default: 'site_archive'
       max_pages:
-        description: 'Max pages to crawl (1-5000, default: 500)'
+        description: 'Max pages to crawl (IGNORED if JSON provided, default: 500)'
         required: false
         type: string
         default: '500'
@@ -50,18 +50,28 @@ jobs:
       - name: Validate and prepare inputs
         id: validate
         run: |
-          # Get inputs
           URL_INPUT="${{ github.event.inputs.url }}"
           OUTPUT_DIR="${{ github.event.inputs.output_dir }}"
           MAX_PAGES="${{ github.event.inputs.max_pages }}"
           
+          echo "📥 Raw URL input:"
+          echo "$URL_INPUT"
+          echo ""
+          
           # Try to parse as JSON (from n8n)
-          if [[ "$URL_INPUT" =~ ^\{ ]]; then
-            echo "📦 Detected JSON input from n8n, parsing..."
-            URL=$(echo "$URL_INPUT" | jq -r '.url // empty' 2>/dev/null || echo "")
-            OUTPUT_DIR=$(echo "$URL_INPUT" | jq -r '.output_dir // empty' 2>/dev/null || echo "")
-            MAX_PAGES=$(echo "$URL_INPUT" | jq -r '.max_pages // empty' 2>/dev/null || echo "")
+          if echo "$URL_INPUT" | grep -qE '^\s*\{'; then
+            echo "✅ Detected JSON input from n8n"
+            URL=$(echo "$URL_INPUT" | jq -r '.url // empty' 2>/dev/null)
+            OUTPUT_DIR=$(echo "$URL_INPUT" | jq -r '.output_dir // .output_dir // empty' 2>/dev/null)
+            MAX_PAGES=$(echo "$URL_INPUT" | jq -r '.max_pages // .max_pages // empty' 2>/dev/null)
+            
+            if [ -z "$URL" ]; then
+              echo "❌ ERROR: JSON parsing failed or 'url' field missing"
+              echo "Attempted to parse: $URL_INPUT"
+              exit 1
+            fi
           else
+            echo "ℹ️ Standard string input detected"
             URL="$URL_INPUT"
           fi
           
@@ -71,7 +81,7 @@ jobs:
           MAX_PAGES=${MAX_PAGES:-"500"}
           
           echo ""
-          echo "✅ Raw inputs:"
+          echo "📋 Parsed inputs:"
           echo "   URL: $URL"
           echo "   Output Dir: $OUTPUT_DIR"
           echo "   Max Pages: $MAX_PAGES"
@@ -79,33 +89,36 @@ jobs:
           
           # Validate URL
           if [[ ! "$URL" =~ ^https?:// ]]; then
-            echo "❌ Error: URL must start with http:// or https://"
+            echo "❌ ERROR: URL must start with http:// or https://"
+            echo "Got: $URL"
             exit 1
           fi
           
           # Validate max_pages (CRITICAL)
           if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]]; then
-            echo "❌ Error: max_pages must be numeric, got \"$MAX_PAGES\""
+            echo "❌ ERROR: max_pages must be numeric, got \"$MAX_PAGES\""
             exit 1
           fi
           
           if (( MAX_PAGES < 1 )) || (( MAX_PAGES > 5000 )); then
-            echo "❌ Error: max_pages must be 1-5000, got $MAX_PAGES"
+            echo "❌ ERROR: max_pages must be 1-5000, got $MAX_PAGES"
             exit 1
           fi
           
           # Sanitize directory name
           SANITIZED_DIR=$(echo "$OUTPUT_DIR" | tr -cd '[:alnum:]_-')
+          if [ -z "$SANITIZED_DIR" ]; then
+            SANITIZED_DIR="site_archive"
+          fi
           
-          echo "url=$URL" >> $GITHUB_OUTPUT
           echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> $GITHUB_OUTPUT
           echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
           
-          echo ""
-          echo "✅ Validated inputs:"
+          echo "✅ Validation PASSED"
           echo "   URL: $URL"
           echo "   Output Dir: $SANITIZED_DIR"
-          echo "   Max Pages: $MAX_PAGES (PASSED)"
+          echo "   Max Pages: $MAX_PAGES"
 
       - name: Download website (with max_pages)
         id: download
@@ -134,19 +147,20 @@ jobs:
           echo "🔍 Verifying archive at: $ARCHIVE_PATH"
           
           if [ ! -d "$ARCHIVE_PATH" ]; then
-            echo "❌ ERROR: Archive directory missing: $ARCHIVE_PATH"
+            echo "⚠️ WARNING: Archive directory not found at $ARCHIVE_PATH"
+            echo "Listing $OUTPUT_DIR:"
+            ls -la "$OUTPUT_DIR" 2>/dev/null || echo "Directory doesn't exist"
             exit 1
           fi
           
           if [ -z "$(ls -A "$ARCHIVE_PATH" 2>/dev/null)" ]; then
-            echo "❌ ERROR: Archive is empty"
+            echo "❌ ERROR: Archive directory is empty"
             exit 1
           fi
           
           FILE_COUNT=$(find "$ARCHIVE_PATH" -type f | wc -l)
           DIR_SIZE=$(du -sh "$ARCHIVE_PATH" | cut -f1)
           
-          echo ""
           echo "✅ Archive verified:"
           echo "   Files: $FILE_COUNT"
           echo "   Size: $DIR_SIZE"
@@ -158,22 +172,27 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: ${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}
           path: ${{ steps.verify.outputs.upload_path }}
           retention-days: 30
           compression-level: 6
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Create summary
         if: always()
         run: |
-          echo "## ✅ Download Complete" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Download Site Workflow" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **URL** | ${{ steps.validate.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Max Pages** | ${{ steps.validate.outputs.max_pages }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Files** | ${{ steps.verify.outputs.file_count }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Size** | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Status** | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.verify.outputs.file_count }}" ]; then
+            echo "| **Files Downloaded** | ${{ steps.verify.outputs.file_count }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Archive Size** | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Status** | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| **Status** | ⚠️ Completed with warnings |" >> $GITHUB_STEP_SUMMARY
+          fi
