@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: '500'
+      resumeUrl:
+        description: 'Resume URL (n8n dispatchAndWait internal)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
