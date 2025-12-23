@@ -1,7 +1,7 @@
 # @description Downloads and archives website content with Selenium/Python crawler
 # @requires Python 3.11, requirements.txt, smart_archiver_v4.py
 # @outputs Artifact: site-archive-RUN_ID (90 days retention)
-# @uses GitHub Actions, Python, Selenium, PostgreSQL (optional)
+# @uses GitHub Actions, Python, Selenium
 
 name: Download Site (Artifact Only)
 
@@ -16,7 +16,7 @@ on:
         description: 'Max pages to crawl (1-5000)'
         required: false
         type: string
-        default: '100'
+        default: '500'
       use_selenium:
         description: 'Use Selenium for Cloudflare (true/false)'
         required: false
@@ -26,22 +26,7 @@ on:
         description: 'Ignore robots.txt (true/false)'
         required: false
         type: string
-        default: 'true'  # ← CHANGED: true by default
-      target_repo:
-        description: 'Target repository for upload (owner/repo)'
-        required: false
-        type: string
-        default: ''
-      auto_deploy:
-        description: 'Auto deploy after download (true/false)'
-        required: false
-        type: string
-        default: 'false'
-      resumeUrl:
-        description: 'n8n webhook callback URL (for dispatchAndWait)'
-        required: false
-        type: string
-        default: ''
+        default: 'true'
 
 permissions:
   contents: read
@@ -67,35 +52,24 @@ jobs:
           cache: 'pip'
           cache-dependency-path: requirements.txt
       
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Validate and normalize inputs
-        id: normalize
+      - name: Validate inputs
+        id: validate
         run: |
-          # Extract and normalize inputs
           URL="${{ github.event.inputs.url }}"
           MAX_PAGES="${{ github.event.inputs.max_pages }}"
           USE_SELENIUM="${{ github.event.inputs.use_selenium }}"
           IGNORE_ROBOTS="${{ github.event.inputs.ignore_robots }}"
-          AUTO_DEPLOY="${{ github.event.inputs.auto_deploy }}"
           
           # Apply defaults if empty
           URL=${URL:-"https://callmedley.com"}
-          MAX_PAGES=${MAX_PAGES:-"100"}
+          MAX_PAGES=${MAX_PAGES:-"500"}
           USE_SELENIUM=${USE_SELENIUM:-"true"}
-          IGNORE_ROBOTS=${IGNORE_ROBOTS:-"true"}  # ← DEFAULT true NOW
-          AUTO_DEPLOY=${AUTO_DEPLOY:-"false"}
+          IGNORE_ROBOTS=${IGNORE_ROBOTS:-"true"}
           
           # Validate URL format
           if [[ ! "$URL" =~ ^https?:// ]]; then
@@ -113,7 +87,6 @@ jobs:
           # Normalize boolean strings to lowercase
           USE_SELENIUM=$(echo "$USE_SELENIUM" | tr '[:upper:]' '[:lower:]')
           IGNORE_ROBOTS=$(echo "$IGNORE_ROBOTS" | tr '[:upper:]' '[:lower:]')
-          AUTO_DEPLOY=$(echo "$AUTO_DEPLOY" | tr '[:upper:]' '[:lower:]')
           
           # Extract domain from URL
           DOMAIN=$(echo "$URL" | sed -E 's|^https?://||' | sed -E 's|/.*||' | cut -d'?' -f1)
@@ -123,26 +96,21 @@ jobs:
           echo "max_pages=$MAX_PAGES_INT" >> $GITHUB_OUTPUT
           echo "use_selenium=$USE_SELENIUM" >> $GITHUB_OUTPUT
           echo "ignore_robots=$IGNORE_ROBOTS" >> $GITHUB_OUTPUT
-          echo "auto_deploy=$AUTO_DEPLOY" >> $GITHUB_OUTPUT
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           
-          echo "✅ Inputs validated and normalized:"
+          echo "✅ Inputs validated:"
           echo "  - URL: $URL"
           echo "  - Max Pages: $MAX_PAGES_INT"
           echo "  - Domain: $DOMAIN"
           echo "  - Use Selenium: $USE_SELENIUM"
           echo "  - Ignore robots.txt: $IGNORE_ROBOTS"
       
-      - name: Download site with smart_archiver_v4.py
+      - name: Run ArchiveBot v5.2 - smart_archiver_v4.py
         run: |
-          echo "🔧 Running archiver with env vars..."
-          echo "USE_SELENIUM=${{ steps.normalize.outputs.use_selenium }}"
-          echo "IGNORE_ROBOTS=${{ steps.normalize.outputs.ignore_robots }}"
-          
-          python3 smart_archiver_v4.py "${{ steps.normalize.outputs.url }}" "${{ steps.normalize.outputs.max_pages }}"
+          python3 smart_archiver_v4.py "${{ steps.validate.outputs.url }}" "${{ steps.validate.outputs.max_pages }}"
         env:
-          USE_SELENIUM: ${{ steps.normalize.outputs.use_selenium }}
-          IGNORE_ROBOTS: ${{ steps.normalize.outputs.ignore_robots }}
+          USE_SELENIUM: ${{ steps.validate.outputs.use_selenium }}
+          IGNORE_ROBOTS: ${{ steps.validate.outputs.ignore_robots }}
       
       - name: Verify archive
         run: |
@@ -156,7 +124,8 @@ jobs:
           echo "✅ Archive found: $ARCHIVE_DIR"
           echo "📃 Archive contents:"
           du -sh "$ARCHIVE_DIR"
-          find "$ARCHIVE_DIR" -type f | head -20
+          find "$ARCHIVE_DIR" -type f -name "*.html" | wc -l
+          echo "HTML pages found"
       
       - name: Upload archive artifact
         if: always()
@@ -175,51 +144,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **URL** | ${{ steps.normalize.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Max Pages** | ${{ steps.normalize.outputs.max_pages }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Domain** | ${{ steps.normalize.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Selenium** | ${{ steps.normalize.outputs.use_selenium }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Ignore robots.txt** | ${{ steps.normalize.outputs.ignore_robots }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Auto Deploy** | ${{ steps.normalize.outputs.auto_deploy }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | ${{ steps.validate.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Max Pages** | ${{ steps.validate.outputs.max_pages }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Domain** | ${{ steps.validate.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Selenium** | ${{ steps.validate.outputs.use_selenium }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ignore robots.txt** | ${{ steps.validate.outputs.ignore_robots }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Artifact Name**: site-archive-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "**Retention**: 90 days" >> $GITHUB_STEP_SUMMARY
-      
-      - name: Notify n8n on completion
-        if: always() && github.event.inputs.resumeUrl != ''
-        run: |
-          RESUME_URL="${{ github.event.inputs.resumeUrl }}"
-          JOB_STATUS="${{ job.status }}"
-          RUN_ID="${{ github.run_id }}"
-          DOMAIN="${{ steps.normalize.outputs.domain }}"
-          MAX_PAGES="${{ steps.normalize.outputs.max_pages }}"
-          TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          ARTIFACT_NAME="site-archive-${{ github.run_id }}"
-          
-          if [ -n "$RESUME_URL" ]; then
-            echo "📡 Sending callback to n8n..."
-            
-            # Use printf to properly escape JSON
-            PAYLOAD=$(printf '{
-              "status": "%s",
-              "conclusion": "%s",
-              "run_id": %s,
-              "workflow": "download-site",
-              "domain": "%s",
-              "max_pages": "%s",
-              "artifact_name": "%s",
-              "timestamp": "%s"
-            }' "$JOB_STATUS" "$JOB_STATUS" "$RUN_ID" "$DOMAIN" "$MAX_PAGES" "$ARTIFACT_NAME" "$TIMESTAMP")
-            
-            echo "Payload: $PAYLOAD"
-            
-            curl -k \
-              -X POST "$RESUME_URL" \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD" \
-              --retry 3 \
-              --retry-delay 5 \
-              --connect-timeout 10 \
-              --max-time 30 \
-              -w "\n✅ Callback sent (HTTP %{http_code})\n" || echo "⚠️  Callback failed (non-critical)"
-          fi
