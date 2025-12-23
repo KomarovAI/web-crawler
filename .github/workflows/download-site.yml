@@ -13,11 +13,11 @@ on:
         required: false
         type: string
         default: 'site_archive'
-      max_pages:
-        description: 'Max pages to crawl (1-5000, default: 500)'
+      depth_level:
+        description: 'Crawl depth: 1=start, 2=start+children (recommended), 3=deeper, 4=very deep'
         required: false
         type: string
-        default: '500'
+        default: '2'
       resumeUrl:
         description: 'Resume URL (n8n dispatchAndWait internal)'
         required: false
@@ -56,20 +56,20 @@ jobs:
       - name: Validate and prepare inputs
         id: validate
         run: |
-          URL="${{ github.event.inputs.url }}"
-          OUTPUT_DIR="${{ github.event.inputs.output_dir }}"
-          MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          URL="{{ github.event.inputs.url }}"
+          OUTPUT_DIR="{{ github.event.inputs.output_dir }}"
+          DEPTH_LEVEL="{{ github.event.inputs.depth_level }}"
           
           # Apply defaults
           URL=${URL:-"https://callmedley.com"}
           OUTPUT_DIR=${OUTPUT_DIR:-"site_archive"}
-          MAX_PAGES=${MAX_PAGES:-"500"}
+          DEPTH_LEVEL=${DEPTH_LEVEL:-"2"}
           
           echo ""
           echo "📋 Parsed inputs:"
           echo "   URL: $URL"
           echo "   Output Dir: $OUTPUT_DIR"
-          echo "   Max Pages: $MAX_PAGES"
+          echo "   Depth Level: $DEPTH_LEVEL"
           echo ""
           
           # Validate URL
@@ -79,16 +79,30 @@ jobs:
             exit 1
           fi
           
-          # Validate max_pages (CRITICAL)
-          if ! [[ "$MAX_PAGES" =~ ^[0-9]+$ ]]; then
-            echo "❌ ERROR: max_pages must be numeric, got \"$MAX_PAGES\""
+          # Validate depth_level (CRITICAL)
+          if ! [[ "$DEPTH_LEVEL" =~ ^[0-9]+$ ]]; then
+            echo "❌ ERROR: depth_level must be numeric, got \"$DEPTH_LEVEL\""
             exit 1
           fi
           
-          if (( MAX_PAGES < 1 )) || (( MAX_PAGES > 5000 )); then
-            echo "❌ ERROR: max_pages must be 1-5000, got $MAX_PAGES"
+          if (( DEPTH_LEVEL < 1 )) || (( DEPTH_LEVEL > 4 )); then
+            echo "❌ ERROR: depth_level must be 1-4, got $DEPTH_LEVEL"
+            echo ""
+            echo "Levels:"
+            echo "  1 = Start page only (fastest)"
+            echo "  2 = Start + direct children (recommended)"
+            echo "  3 = Start + 2 levels deep"
+            echo "  4 = Very deep crawl (be careful!)"
             exit 1
           fi
+          
+          # Get level description
+          case $DEPTH_LEVEL in
+            1) LEVEL_DESC="Start page only (fastest)" ;;
+            2) LEVEL_DESC="Start + direct children (recommended)" ;;
+            3) LEVEL_DESC="Start + 2 levels deep" ;;
+            4) LEVEL_DESC="Very deep crawl (slow, be careful!)" ;;
+          esac
           
           # Sanitize directory name
           SANITIZED_DIR=$(echo "$OUTPUT_DIR" | tr -cd '[:alnum:]_-')
@@ -98,33 +112,35 @@ jobs:
           
           echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
           echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
+          echo "depth_level=$DEPTH_LEVEL" >> $GITHUB_OUTPUT
+          echo "level_description=$LEVEL_DESC" >> $GITHUB_OUTPUT
           
           echo "✅ Validation PASSED"
           echo "   URL: $URL"
           echo "   Output Dir: $SANITIZED_DIR"
-          echo "   Max Pages: $MAX_PAGES"
+          echo "   Depth Level: $DEPTH_LEVEL ($LEVEL_DESC)"
 
-      - name: Download website (with max_pages)
+      - name: Download website (with depth_level)
         id: download
         run: |
           echo ""
           echo "🚀 Starting crawler with parameters:"
           echo "   URL: ${{ steps.validate.outputs.url }}"
           echo "   Output Dir: ${{ steps.validate.outputs.output_dir }}"
-          echo "   Max Pages: ${{ steps.validate.outputs.max_pages }}"
+          echo "   Depth Level: ${{ steps.validate.outputs.depth_level }}"
+          echo "   Description: ${{ steps.validate.outputs.level_description }}"
           echo ""
           
           python3 crawler.py \
             "${{ steps.validate.outputs.url }}" \
             "${{ steps.validate.outputs.output_dir }}" \
-            "${{ steps.validate.outputs.max_pages }}"
+            "${{ steps.validate.outputs.depth_level }}"
 
       - name: Verify archive
         id: verify
         if: always()
         run: |
-          OUTPUT_DIR="${{ steps.validate.outputs.output_dir }}"
+          OUTPUT_DIR="{{ steps.validate.outputs.output_dir }}"
           DOMAIN=$(echo "${{ steps.validate.outputs.url }}" | sed -E 's|^https?://||' | sed -E 's|/.*||')
           ARCHIVE_PATH="$OUTPUT_DIR/$DOMAIN"
           
@@ -173,7 +189,7 @@ jobs:
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **URL** | ${{ steps.validate.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Max Pages** | ${{ steps.validate.outputs.max_pages }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Depth Level** | ${{ steps.validate.outputs.depth_level }} - ${{ steps.validate.outputs.level_description }} |" >> $GITHUB_STEP_SUMMARY
           if [ -n "${{ steps.verify.outputs.file_count }}" ]; then
             echo "| **Files Downloaded** | ${{ steps.verify.outputs.file_count }} |" >> $GITHUB_STEP_SUMMARY
             echo "| **Archive Size** | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
@@ -185,9 +201,9 @@ jobs:
       - name: Resume n8n execution (dispatchAndWait callback)
         if: always() && github.event.inputs.resumeUrl != ''
         run: |
-          RESUME_URL="${{ github.event.inputs.resumeUrl }}"
-          FILE_COUNT="${{ steps.verify.outputs.file_count }}"
-          DIR_SIZE="${{ steps.verify.outputs.dir_size }}"
+          RESUME_URL="{{ github.event.inputs.resumeUrl }}"
+          FILE_COUNT="{{ steps.verify.outputs.file_count }}"
+          DIR_SIZE="{{ steps.verify.outputs.dir_size }}"
           STATUS="success"
           
           if [ -z "$FILE_COUNT" ]; then
@@ -210,6 +226,7 @@ jobs:
               \"files_count\": $FILE_COUNT,
               \"archive_size\": \"$DIR_SIZE\",
               \"url\": \"${{ steps.validate.outputs.url }}\",
+              \"depth_level\": ${{ steps.validate.outputs.depth_level }},
               \"run_id\": \"${{ github.run_id }}\"
             }" \
             -v || echo "⚠️ Failed to send callback, but workflow completed"
