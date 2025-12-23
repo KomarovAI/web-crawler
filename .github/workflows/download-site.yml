@@ -45,9 +45,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget
-          pip install requests beautifulsoup4 selenium
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget
+          pip install -q requests beautifulsoup4 selenium
 
       - name: Validate inputs
         id: validate
@@ -56,129 +56,69 @@ jobs:
           INPUT_DEPTH: ${{ github.event.inputs.depth_level || '2' }}
           INPUT_OUTPUT: ${{ github.event.inputs.output_dir || 'site_archive' }}
         run: |
-          echo ""
-          echo "📋 Parsed inputs:"
-          echo "   URL: $INPUT_URL"
-          echo "   Output Dir: $INPUT_OUTPUT"
-          echo "   Depth Level: $INPUT_DEPTH"
-          echo ""
-
           # Validate URL
           if [[ ! "$INPUT_URL" =~ ^https?:// ]]; then
-            echo "❌ ERROR: URL must start with http:// or https://"
-            echo "Got: $INPUT_URL"
+            echo "❌ URL must start with http:// or https://"
             exit 1
           fi
 
-          # Validate depth_level (CRITICAL)
-          if ! [[ "$INPUT_DEPTH" =~ ^[0-9]+$ ]]; then
-            echo "❌ ERROR: depth_level must be numeric, got \"$INPUT_DEPTH\""
-            exit 1
-          fi
-
-          if (( INPUT_DEPTH < 1 )) || (( INPUT_DEPTH > 4 )); then
-            echo "❌ ERROR: depth_level must be 1-4, got $INPUT_DEPTH"
-            echo ""
-            echo "Levels:"
-            echo "  1 = Start page only (fastest)"
-            echo "  2 = Start + direct children (recommended)"
-            echo "  3 = Start + 2 levels deep"
-            echo "  4 = Very deep crawl (be careful!)"
+          # Validate depth_level
+          if ! [[ "$INPUT_DEPTH" =~ ^[0-9]+$ ]] || (( INPUT_DEPTH < 1 )) || (( INPUT_DEPTH > 4 )); then
+            echo "❌ depth_level must be 1-4"
             exit 1
           fi
 
           # Get level description
           case $INPUT_DEPTH in
-            1) LEVEL_DESC="Start page only (fastest)" ;;
-            2) LEVEL_DESC="Start + direct children (recommended)" ;;
-            3) LEVEL_DESC="Start + 2 levels deep" ;;
-            4) LEVEL_DESC="Very deep crawl (slow, be careful!)" ;;
+            1) LEVEL_DESC="homepage only" ;;
+            2) LEVEL_DESC="+direct children" ;;
+            3) LEVEL_DESC="+2 levels" ;;
+            4) LEVEL_DESC="very deep" ;;
           esac
 
           # Sanitize directory name
           SANITIZED_DIR=$(echo "$INPUT_OUTPUT" | tr -cd '[:alnum:]_-')
-          if [ -z "$SANITIZED_DIR" ]; then
-            SANITIZED_DIR="site_archive"
-          fi
+          SANITIZED_DIR=${SANITIZED_DIR:-site_archive}
 
-          # Output for next steps
           echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
           echo "url=$INPUT_URL" >> $GITHUB_OUTPUT
           echo "depth_level=$INPUT_DEPTH" >> $GITHUB_OUTPUT
           echo "level_description=$LEVEL_DESC" >> $GITHUB_OUTPUT
+          echo "✅ Validated: $INPUT_URL (depth=$INPUT_DEPTH)"
 
-          echo "✅ Validation PASSED"
-          echo "   URL: $INPUT_URL"
-          echo "   Output Dir: $SANITIZED_DIR"
-          echo "   Depth Level: $INPUT_DEPTH ($LEVEL_DESC)"
-
-      - name: Download site with wget
+      - name: Download site
         id: download
         env:
           URL: ${{ steps.validate.outputs.url }}
           OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
           DEPTH: ${{ steps.validate.outputs.depth_level }}
         run: |
-          echo ""
-          echo "🌐 Starting site download..."
-          echo "   URL: $URL"
-          echo "   Depth Level: $DEPTH"
-          echo "   Output Dir: $OUTPUT_DIR"
-          echo ""
-
-          # Create output directory
           mkdir -p "$OUTPUT_DIR"
-
-          # Download with wget
-          # -r = recursive, -l = level depth, -k = convert links, -p = page requisites
-          # -E = add .html extension, --no-parent = don't go up directory
-          wget \
-            --recursive \
-            --level="$DEPTH" \
-            --convert-links \
-            --page-requisites \
-            --adjust-extension \
-            --no-parent \
-            --directory-prefix="$OUTPUT_DIR" \
-            --continue \
-            --timeout=30 \
-            --tries=3 \
-            --user-agent="Mozilla/5.0 (X11; Linux x86_64)" \
-            "$URL" || true  # Don't fail on wget errors
-
-          echo "✅ Download completed (or partially completed)"
+          echo "⏳ Downloading: $URL (depth=$DEPTH)"
+          
+          wget --quiet --recursive --level="$DEPTH" --convert-links --page-requisites \
+            --adjust-extension --no-parent --directory-prefix="$OUTPUT_DIR" \
+            --timeout=30 --tries=3 --user-agent="Mozilla/5.0" "$URL" || true
+          
+          echo "✅ Download complete"
 
       - name: Verify archive
         id: verify
         env:
           OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
         run: |
-          echo ""
-          echo "🔍 Verifying archive at: $OUTPUT_DIR"
-
-          if [ ! -d "$OUTPUT_DIR" ]; then
-            echo "❌ ERROR: Output directory not found"
-            exit 1
-          fi
-
-          if [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
-            echo "⚠️ WARNING: Output directory is empty"
-            echo "Listing $OUTPUT_DIR:"
-            ls -la "$OUTPUT_DIR"
+          if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
+            echo "❌ Archive is empty or missing"
             exit 1
           fi
 
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l)
           DIR_SIZE=$(du -sh "$OUTPUT_DIR" | cut -f1)
 
-          echo "✅ Archive verified:"
-          echo "   Files: $FILE_COUNT"
-          echo "   Size: $DIR_SIZE"
-          echo ""
-
-          echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
+          echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
+          echo "✅ Verified: $FILE_COUNT files, $DIR_SIZE"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -197,34 +137,19 @@ jobs:
           DIR_SIZE: ${{ steps.verify.outputs.dir_size || '0' }}
           URL: ${{ steps.validate.outputs.url }}
           DEPTH_LEVEL: ${{ steps.validate.outputs.depth_level }}
-          RUN_ID: ${{ github.run_id }}
           STATUS: ${{ job.status }}
         run: |
-          echo ""
-          echo "📡 Sending callback to N8N..."
-          echo "   Resume URL: $RESUME_URL"
-          echo "   Status: $STATUS"
-          echo "   Files: $FILE_COUNT"
-          echo "   Size: $DIR_SIZE"
-          echo ""
-
-          if [ -z "$RESUME_URL" ] || [ "$RESUME_URL" == "" ]; then
-            echo "⚠️ No resume URL provided, skipping callback"
-            exit 0
-          fi
-
-          # Send callback with curl
-          curl -X POST "$RESUME_URL" \
-            -H "Content-Type: application/json" \
+          [ -z "$RESUME_URL" ] && exit 0
+          
+          curl -s -X POST "$RESUME_URL" -H "Content-Type: application/json" \
             -d "{
               \"status\": \"$STATUS\",
               \"files_count\": $FILE_COUNT,
               \"archive_size\": \"$DIR_SIZE\",
               \"url\": \"$URL\",
               \"depth_level\": $DEPTH_LEVEL,
-              \"run_id\": \"$RUN_ID\"
-            }" \
-            -v || echo "⚠️ Failed to send callback, but workflow completed"
+              \"run_id\": \"${{ github.run_id }}\"
+            }" || true
 
       - name: Create summary
         if: always()
@@ -232,16 +157,7 @@ jobs:
           URL: ${{ steps.validate.outputs.url }}
           DEPTH: ${{ steps.validate.outputs.depth_level }}
           DESC: ${{ steps.validate.outputs.level_description }}
-          FILE_COUNT: ${{ steps.verify.outputs.file_count || 'N/A' }}
-          DIR_SIZE: ${{ steps.verify.outputs.dir_size || 'N/A' }}
+          COUNT: ${{ steps.verify.outputs.file_count || 'N/A' }}
+          SIZE: ${{ steps.verify.outputs.dir_size || 'N/A' }}
           STATUS: ${{ job.status }}
-        run: |
-          echo "## ✅ Download Site Workflow" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **URL** | $URL |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Depth Level** | $DEPTH - $DESC |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Files Downloaded** | $FILE_COUNT |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Archive Size** | $DIR_SIZE |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Status** | $STATUS |" >> $GITHUB_STEP_SUMMARY
+        run: echo "$STATUS: $COUNT files, $SIZE from $URL (depth=$DEPTH)" >> $GITHUB_STEP_SUMMARY
