@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: 'true'
+      resumeUrl:
+        description: 'n8n webhook callback URL (for dispatchAndWait)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -152,3 +157,37 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Artifact Name**: site-archive-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "**Retention**: 90 days" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Notify n8n on completion
+        if: always() && github.event.inputs.resumeUrl != ''
+        run: |
+          RESUME_URL="${{ github.event.inputs.resumeUrl }}"
+          JOB_STATUS="${{ job.status }}"
+          RUN_ID="${{ github.run_id }}"
+          DOMAIN="${{ steps.validate.outputs.domain }}"
+          MAX_PAGES="${{ steps.validate.outputs.max_pages }}"
+          TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          ARTIFACT_NAME="site-archive-${{ github.run_id }}"
+          
+          if [ -n "$RESUME_URL" ]; then
+            echo "📡 Sending callback to n8n..."
+            
+            PAYLOAD=$(printf '{
+              "status": "%s",
+              "run_id": %s,
+              "domain": "%s",
+              "max_pages": "%s",
+              "artifact_name": "%s",
+              "timestamp": "%s"
+            }' "$JOB_STATUS" "$RUN_ID" "$DOMAIN" "$MAX_PAGES" "$ARTIFACT_NAME" "$TIMESTAMP")
+            
+            curl -k \
+              -X POST "$RESUME_URL" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              --retry 3 \
+              --retry-delay 5 \
+              --connect-timeout 10 \
+              --max-time 30 \
+              -w "\n✅ Callback sent (HTTP %{http_code})\n" || echo "⚠️ Callback failed (non-critical)"
+          fi
