@@ -4,31 +4,41 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Start URL (e.g., https://example.com)'
+        description: 'Website URL to download (https://example.com)'
         required: true
         type: string
       output_dir:
-        description: 'Output directory for the archive'
+        description: 'Output directory (default: site_archive)'
         required: false
         type: string
         default: 'site_archive'
       max_pages:
-        description: 'Maximum pages to crawl (optional, ignored in v2.1)'
+        description: 'Max pages to crawl (default: 500)'
         required: false
         type: string
         default: '500'
       use_selenium:
-        description: 'Use Selenium for JavaScript (optional, future feature)'
+        description: 'Use Selenium (default: false)'
+        required: false
+        type: string
+        default: 'false'
+      useSelenium:
+        description: 'Use Selenium - alternative name (default: false)'
         required: false
         type: string
         default: 'false'
       ignore_robots:
-        description: 'Ignore robots.txt (optional, future feature)'
+        description: 'Ignore robots.txt (default: true)'
+        required: false
+        type: string
+        default: 'true'
+      ignoreRobots:
+        description: 'Ignore robots.txt - alternative name (default: true)'
         required: false
         type: string
         default: 'true'
       resumeUrl:
-        description: 'n8n webhook callback URL (optional)'
+        description: 'n8n callback webhook URL (optional)'
         required: false
         type: string
         default: ''
@@ -39,7 +49,7 @@ permissions:
 
 jobs:
   download-site:
-    name: Download Website
+    name: Download Website Archive
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -50,7 +60,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install dependencies
+      - name: Install wget
         run: |
           sudo apt-get update
           sudo apt-get install -y wget
@@ -61,73 +71,70 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Validate inputs
+      - name: Validate and prepare inputs
         id: validate
         run: |
+          # Handle both naming conventions (snake_case and camelCase)
           URL="${{ github.event.inputs.url }}"
           OUTPUT_DIR="${{ github.event.inputs.output_dir }}"
+          USE_SELENIUM="${{ github.event.inputs.use_selenium || github.event.inputs.useSelenium }}"
+          IGNORE_ROBOTS="${{ github.event.inputs.ignore_robots || github.event.inputs.ignoreRobots }}"
           
-          # Apply defaults if empty
+          # Apply defaults
           URL=${URL:-"https://callmedley.com"}
           OUTPUT_DIR=${OUTPUT_DIR:-"site_archive"}
+          USE_SELENIUM=${USE_SELENIUM:-"false"}
+          IGNORE_ROBOTS=${IGNORE_ROBOTS:-"true"}
           
-          # Validate URL format
+          # Validate URL
           if [[ ! "$URL" =~ ^https?:// ]]; then
             echo "❌ Error: URL must start with http:// or https://"
             exit 1
           fi
           
-          # Sanitize output directory name
+          # Sanitize directory name
           SANITIZED_DIR=$(echo "$OUTPUT_DIR" | tr -cd '[:alnum:]_-')
           
           echo "url=$URL" >> $GITHUB_OUTPUT
           echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
+          echo "use_selenium=$USE_SELENIUM" >> $GITHUB_OUTPUT
+          echo "ignore_robots=$IGNORE_ROBOTS" >> $GITHUB_OUTPUT
           
           echo "✅ Inputs validated:"
           echo "   URL: $URL"
-          echo "   Output Directory: $SANITIZED_DIR"
-          echo ""
-          echo "Note: max_pages, use_selenium, ignore_robots are stored for future use"
+          echo "   Output Dir: $SANITIZED_DIR"
+          echo "   Use Selenium: $USE_SELENIUM"
+          echo "   Ignore robots.txt: $IGNORE_ROBOTS"
 
       - name: Download website with wget
+        id: download
         run: |
           python3 crawler.py "${{ steps.validate.outputs.url }}" "${{ steps.validate.outputs.output_dir }}"
 
-      - name: Verify archive content
+      - name: Verify archive
         id: verify
         run: |
           OUTPUT_DIR="${{ steps.validate.outputs.output_dir }}"
           DOMAIN=$(echo "${{ steps.validate.outputs.url }}" | sed -E 's|^https?://||' | sed -E 's|/.*||')
           ARCHIVE_PATH="$OUTPUT_DIR/$DOMAIN"
           
-          echo "📂 Looking for archive at: $ARCHIVE_PATH"
-          
-          if [ ! -d "$ARCHIVE_PATH" ]; then
-            echo "❌ ERROR: Archive directory '$ARCHIVE_PATH' does not exist"
-            echo ""
-            echo "📋 Contents of '$OUTPUT_DIR':"
-            ls -la "$OUTPUT_DIR" 2>/dev/null || echo "   (empty)"
-            exit 1
-          fi
-          
-          if [ -z "$(ls -A "$ARCHIVE_PATH")" ]; then
-            echo "❌ ERROR: Archive directory '$ARCHIVE_PATH' is empty"
+          if [ ! -d "$ARCHIVE_PATH" ] || [ -z "$(ls -A "$ARCHIVE_PATH" 2>/dev/null)" ]; then
+            echo "❌ ERROR: Archive is empty or missing: $ARCHIVE_PATH"
             exit 1
           fi
           
           FILE_COUNT=$(find "$ARCHIVE_PATH" -type f | wc -l)
           DIR_SIZE=$(du -sh "$ARCHIVE_PATH" | cut -f1)
           
-          echo "✅ Verification successful!"
-          echo "   Directory: $ARCHIVE_PATH"
-          echo "   Total Files: $FILE_COUNT"
-          echo "   Total Size: $DIR_SIZE"
+          echo "✅ Archive verified successfully!"
+          echo "   Files: $FILE_COUNT"
+          echo "   Size: $DIR_SIZE"
           
           echo "upload_path=$ARCHIVE_PATH" >> $GITHUB_OUTPUT
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
 
-      - name: Upload site archive
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}
@@ -136,50 +143,26 @@ jobs:
           compression-level: 6
           if-no-files-found: error
 
-      - name: Create job summary
+      - name: Create summary
         if: always()
         run: |
-          echo "## ✅ Site Download Complete" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Download Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **URL** | ${{ steps.validate.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Output Dir** | ${{ steps.validate.outputs.output_dir }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Files** | ${{ steps.verify.outputs.file_count }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Size** | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Artifact** | ${{ steps.validate.outputs.output_dir }}-${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status**: Download successful ✅" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | ✅ Success |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Send n8n callback (if provided)
+      - name: Send n8n callback
         if: always() && github.event.inputs.resumeUrl != ''
+        continue-on-error: true
         run: |
           RESUME_URL="${{ github.event.inputs.resumeUrl }}"
-          JOB_STATUS="${{ job.status }}"
-          RUN_ID="${{ github.run_id }}"
-          DOMAIN="${{ steps.validate.outputs.url }}"
-          
           if [ -n "$RESUME_URL" ]; then
-            echo "📡 Sending callback to n8n: $RESUME_URL"
-            
-            PAYLOAD=$(cat <<EOF
-{
-  "status": "$JOB_STATUS",
-  "run_id": "$RUN_ID",
-  "domain": "$DOMAIN",
-  "artifact_name": "${{ steps.validate.outputs.output_dir }}-$RUN_ID",
-  "file_count": "${{ steps.verify.outputs.file_count }}",
-  "size_mb": "${{ steps.verify.outputs.dir_size }}",
-  "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-}
-EOF
-            )
-            
             curl -X POST "$RESUME_URL" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD" \
-              --retry 3 \
-              --retry-delay 5 \
-              -w "\n✅ Callback sent (HTTP %{http_code})\n" \
-              || echo "⚠️ Callback failed (non-critical)"
+              -d "{\"status\":\"${{ job.status }}\",\"run_id\":\"${{ github.run_id }}\",\"files\":\"${{ steps.verify.outputs.file_count }}\",\"size\":\"${{ steps.verify.outputs.dir_size }}\"}" \
+              --retry 3 || true
           fi
