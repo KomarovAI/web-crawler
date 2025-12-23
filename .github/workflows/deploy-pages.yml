@@ -147,26 +147,40 @@ jobs:
           
           echo "✅ Target repository ready"
 
+      - name: Delete old gh-pages branch if exists
+        env:
+          GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+        continue-on-error: true
+        run: |
+          cd /tmp/target-repo
+          
+          echo "🗑️  Checking for existing gh-pages branch..."
+          if git show-ref --quiet refs/heads/gh-pages; then
+            echo "🗑️  Deleting existing gh-pages branch"
+            git push origin --delete gh-pages || true
+            git branch -D gh-pages || true
+            echo "✅ Old gh-pages branch deleted"
+          else
+            echo "ℹ️  No existing gh-pages branch found"
+          fi
+
       - name: Format and initialize gh-pages branch
         run: |
           cd /tmp/target-repo
           
-          echo "🗑️  Cleaning repository for fresh deployment"
+          echo "📄 Creating fresh orphan gh-pages branch"
+          git checkout --orphan gh-pages
+          
+          # Clean everything
           git rm -rf . 2>/dev/null || true
-          
-          echo "📄 Creating orphan gh-pages branch"
-          git checkout --orphan gh-pages 2>/dev/null || git switch --create gh-pages 2>/dev/null || true
-          
-          # Ensure clean working directory
-          git reset --hard HEAD 2>/dev/null || true
-          rm -rf *
+          rm -rf * .* 2>/dev/null || true
           
           # Create .nojekyll to skip Jekyll processing
           touch .nojekyll
           git add .nojekyll
           git commit -m "chore: Initialize gh-pages branch" --allow-empty
           
-          echo "✅ Repository formatted and ready"
+          echo "✅ Fresh gh-pages branch ready"
 
       - name: Copy archive contents to target repo
         run: |
