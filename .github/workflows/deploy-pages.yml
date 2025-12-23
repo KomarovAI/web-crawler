@@ -259,17 +259,30 @@ jobs:
           echo "   Files: $FINAL_FILES"
           echo "   Size: $FINAL_SIZE"
 
-      - name: Create root index.html for GitHub Pages
+      - name: Move index.html to root - PRIMARY LOCATION
         run: |
           cd /tmp/target-repo
           
-          # Check if pages/index.html exists
+          echo "🔍 Searching for index.html..."
+          
+          # Find all index.html files
+          INDEX_FILES=$(find . -name "index.html" ! -path './.git/*' -type f)
+          echo "Found index.html files:"
+          echo "$INDEX_FILES"
+          
+          # Priority: pages/index.html → root
           if [ -f "pages/index.html" ]; then
-            echo "📄 Creating root index.html from pages/index.html"
+            echo "✅ Found pages/index.html - copying to root as PRIMARY"
             cp pages/index.html index.html
-            echo "✅ Root index.html created"
+            ls -lah index.html
+            echo "✅ Root index.html created from pages/index.html"
+          elif [ -f "index.html" ]; then
+            echo "✅ index.html already in root"
+            ls -lah index.html
           else
-            echo "⚠️  pages/index.html not found - skipping root index creation"
+            echo "⚠️  No index.html found in root or pages/ - WARNING!"
+            echo "📁 Directory structure:"
+            ls -la
           fi
 
       - name: Clean WARC files
@@ -396,6 +409,7 @@ jobs:
           | Domain | ${{ steps.extract.outputs.domain }} |
           | Files | ${{ steps.extract.outputs.file_count }} |
           | Size | ${{ steps.extract.outputs.size }} |
+          | Index Location | ROOT (index.html) |
           | Pages URL | https://KomarovAI.github.io/archived-sites/ |
           EOF
 
@@ -406,18 +420,7 @@ jobs:
           RESUME_URL="${{ github.event.inputs.resumeUrl }}"
           [ -z "$RESUME_URL" ] && exit 0
           
-          PAYLOAD=$(printf '{
-            "status": "%s",
-            "workflow": "deploy-pages",
-            "run_id": %s,
-            "source_run_id": %s,
-            "target_repo": "%s",
-            "domain": "%s",
-            "original_files": "%s",
-            "original_size": "%s",
-            "pages_url": "https://KomarovAI.github.io/archived-sites/",
-            "timestamp": "%s"
-          }' "${{ job.status }}" "${{ github.run_id }}" "${{ steps.validate.outputs.source_run_id }}" "${{ steps.validate.outputs.target_repo }}" "${{ steps.extract.outputs.domain }}" "${{ steps.extract.outputs.file_count }}" "${{ steps.extract.outputs.size }}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')")
+          PAYLOAD=$(printf '{\n            "status": "%s",\n            "workflow": "deploy-pages",\n            "run_id": %s,\n            "source_run_id": %s,\n            "target_repo": "%s",\n            "domain": "%s",\n            "original_files": "%s",\n            "original_size": "%s",\n            "pages_url": "https://KomarovAI.github.io/archived-sites/",\n            "timestamp": "%s"\n          }' "${{ job.status }}" "${{ github.run_id }}" "${{ steps.validate.outputs.source_run_id }}" "${{ steps.validate.outputs.target_repo }}" "${{ steps.extract.outputs.domain }}" "${{ steps.extract.outputs.file_count }}" "${{ steps.extract.outputs.size }}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')")
           
           curl -k -X POST "$RESUME_URL" \
             -H "Content-Type: application/json" \
