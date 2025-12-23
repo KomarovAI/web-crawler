@@ -7,6 +7,7 @@ Full offline-ready site capture with:
 ✅ ACTUAL relative URL conversion (post-processing)
 ✅ Security: URL validation, path traversal protection
 ✅ Reliability: subprocess timeout, file size limits, rate limiting
+✅ Proper page limiting to respect max_pages parameter
 ✅ Zero external dependencies (wget + Python 3.11 stdlib)
 """
 
@@ -17,6 +18,7 @@ import json
 import re
 import time
 import traceback
+import math
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
@@ -29,6 +31,9 @@ WGET_RETRIES = 3
 WGET_WAIT = 2  # Seconds between requests
 SUBPROCESS_TIMEOUT = 3600  # 1 hour max for download
 MAX_ARCHIVE_SIZE_GB = 5  # 5GB limit
+DEFAULT_MAX_PAGES = 500  # Default if not specified
+MIN_MAX_PAGES = 1
+MAX_MAX_PAGES = 5000
 # -------------------
 
 # Configure logging
@@ -88,6 +93,23 @@ class InputValidator:
             raise ValueError(f"URL validation failed: {e}")
     
     @staticmethod
+    def validate_max_pages(max_pages: str) -> int:
+        """
+        Validate and convert max_pages parameter.
+        
+        Ensures:
+        - Is integer
+        - Within allowed range (1-5000)
+        """
+        try:
+            pages = int(max_pages)
+            if pages < MIN_MAX_PAGES or pages > MAX_MAX_PAGES:
+                raise ValueError(f"max_pages must be {MIN_MAX_PAGES}-{MAX_MAX_PAGES}, got {pages}")
+            return pages
+        except ValueError as e:
+            raise ValueError(f"Invalid max_pages: {e}")
+    
+    @staticmethod
     def sanitize_output_dir(path: str) -> Path:
         """
         Sanitize and validate output directory path.
@@ -111,19 +133,29 @@ class InputValidator:
 class SiteArchiver:
     """Professional website archiver with production reliability"""
     
-    def __init__(self, start_url: str, output_path: str):
+    def __init__(self, start_url: str, output_path: str, max_pages: int = DEFAULT_MAX_PAGES):
         # Validate inputs
         InputValidator.validate_url(start_url)
         output_path = InputValidator.sanitize_output_dir(output_path)
         
         self.start_url = start_url
         self.output_path = output_path
+        self.max_pages = max_pages
         self.domain = urlparse(start_url).netloc
         self.scheme = urlparse(start_url).scheme
         self.archive_root = self.output_path / self.domain
+        
+        # Calculate wget --level from max_pages
+        # Rough formula: level ~= log(max_pages) / log(3)
+        # At level 0: 1 page, level 1: ~3 pages, level 2: ~9 pages, level 3: ~27 pages, level 4: ~81 pages
+        # For 50 pages: ~log(50)/log(3) = 3.56 ≈ 4
+        self.wget_level = max(1, min(10, math.ceil(math.log(max(max_pages, 2)) / math.log(3))))
+        
         self.metadata = {
             "domain": self.domain,
             "start_url": start_url,
+            "max_pages_requested": max_pages,
+            "wget_level": self.wget_level,
             "archive_date": datetime.utcnow().isoformat(),
             "status": "initializing",
             "warnings": [],
@@ -138,12 +170,14 @@ class SiteArchiver:
         print(f"📍 Domain: {self.domain}")
         print(f"🌐 URL: {self.start_url}")
         print(f"📁 Output: {self.archive_root}")
+        print(f"📄 Max pages: {self.max_pages} (wget level: {self.wget_level})")
         print(f"⏰ Started: {self.metadata['archive_date']}")
         print("="*80 + "\n")
     
     def download_site(self) -> bool:
         """
         Download site with aggressive asset capturing and security checks.
+        Uses wget --level to limit crawl depth based on max_pages.
         Returns True if successful, False otherwise.
         """
         self._print_banner()
@@ -154,9 +188,9 @@ class SiteArchiver:
         # Construct wget command with production settings
         command = [
             "wget",
-            # --- CRAWLING ---
+            # --- CRAWLING (LIMITED BY LEVEL) ---
             "--recursive",
-            "--level=inf",
+            f"--level={self.wget_level}",        # KEY: Limits depth based on max_pages
             "--page-requisites",
             "--adjust-extension",
             "--no-parent",
@@ -186,7 +220,7 @@ class SiteArchiver:
         ]
         
         print("\n" + "─"*80)
-        print("📥 PHASE 1: Downloading Website Assets (with rate limiting)")
+        print(f"📥 PHASE 1: Downloading Website Assets (max {self.max_pages} pages, level {self.wget_level})")
         print("─"*80 + "\n")
         
         try:
@@ -373,6 +407,7 @@ class SiteArchiver:
         <div class="info">
             <p><strong>Domain:</strong> {self.domain}</p>
             <p><strong>Archived:</strong> {self.metadata['archive_date']}</p>
+            <p><strong>Pages:</strong> ~{self.max_pages} max (depth level {self.wget_level})</p>
             <p>This is an offline snapshot of the website. All assets (images, styles, scripts) are included and converted to relative URLs for offline access.</p>
         </div>
         
@@ -432,6 +467,7 @@ class SiteArchiver:
         print(f"   Images: {self.metadata.get('image_count', 'N/A')}")
         print(f"   CSS: {self.metadata.get('css_count', 'N/A')}")
         print(f"   Size: {self.metadata.get('total_size_mb', 'N/A')} MB")
+        print(f"   Max Pages: {self.max_pages} (level {self.wget_level})")
         
         if self.metadata.get('warnings'):
             print(f"\n⚠️ Warnings ({len(self.metadata['warnings'])})")
@@ -451,6 +487,7 @@ class SiteArchiver:
         print(f"   ✅ Rate-limited requests (ethical)")
         print(f"   ✅ Size limited (5GB max)")
         print(f"   ✅ Timeout protected (1hr max)")
+        print(f"   ✅ Page limit enforced (max {self.max_pages} pages, level {self.wget_level})")
         print(f"\n" + "="*80 + "\n")
     
     def run(self) -> bool:
@@ -483,16 +520,25 @@ class SiteArchiver:
 def main():
     """Entry point with full error handling"""
     try:
-        if len(sys.argv) != 3:
-            print("Usage: python3 crawler.py <URL> <output_directory>", file=sys.stderr)
-            print("Example: python3 crawler.py https://example.com archive", file=sys.stderr)
-            print(f"\nLimits: 5GB max, 1 hour timeout, rate-limited", file=sys.stderr)
+        if len(sys.argv) < 3:
+            print("Usage: python3 crawler.py <URL> <output_directory> [max_pages]", file=sys.stderr)
+            print("Example: python3 crawler.py https://example.com archive 50", file=sys.stderr)
+            print(f"\nDefaults: max_pages={DEFAULT_MAX_PAGES}", file=sys.stderr)
+            print(f"Limits: {MIN_MAX_PAGES}-{MAX_MAX_PAGES} pages, 5GB max, 1 hour timeout, rate-limited", file=sys.stderr)
             sys.exit(1)
         
         url = sys.argv[1]
         output_dir = sys.argv[2]
+        max_pages = DEFAULT_MAX_PAGES
         
-        archiver = SiteArchiver(url, output_dir)
+        if len(sys.argv) > 3:
+            try:
+                max_pages = InputValidator.validate_max_pages(sys.argv[3])
+            except ValueError as e:
+                logger.error(f"Invalid max_pages: {e}")
+                sys.exit(1)
+        
+        archiver = SiteArchiver(url, output_dir, max_pages)
         success = archiver.run()
         
         sys.exit(0 if success else 1)
