@@ -81,7 +81,9 @@ jobs:
         with:
           name: ${{ github.event.inputs.artifact_name }}
           path: ./artifact-download
+          repository: KomarovAI/web-crawler
           run-id: ${{ github.event.inputs.source_run_id }}
+          github-token: ${{ secrets.EXTERNAL_REPO_PAT }}
 
       - name: Extract and verify archive
         id: extract
