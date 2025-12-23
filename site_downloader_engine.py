@@ -115,45 +115,40 @@ class SiteDownloaderEngine:
             return {'success': False, 'error': str(e)}
     
     async def download_with_wget(self, url: str, output_dir: Path, max_pages: int = 100) -> dict:
-        """⚡ Download site using wget with strict quotas"""
+        """⚡ Download site using wget with STRICT no-recursion mode"""
         logger.info(f"⚡ Starting wget download: {url}")
-        logger.info(f"📄 Max pages: {max_pages}, strict quota: {max_pages * 500}KB")
+        logger.info(f"📄 Config: max_pages={max_pages}, NO recursion, page-requisites only")
         
         try:
             parsed = urlparse(url)
             domain = parsed.netloc
             
-            # Strict parameters:
-            # --level 1        = only child pages (1 level deep)
-            # --quota          = hard KB limit (assume avg 500KB per page)
-            # --reject-regex   = block video/media files BEFORE download
-            # --page-requisites = only grab CSS/JS/images ON CURRENT PAGE
-            # --no-parent      = don't crawl parent directories
-            # --wait           = delay between requests to avoid throttling
+            # **CRITICAL FIX**: Remove --recursive completely
+            # Instead use --page-requisites + --no-directories
+            # This downloads ONLY the start URL + its page resources (CSS, JS, images)
+            # NO recursive crawling of links
             
             cmd = [
                 'wget',
-                '--recursive',
-                '--level', '1',
-                '--page-requisites',
-                '--adjust-extension',
-                '--convert-links',
+                '--page-requisites',      # Grab CSS/JS/images from THIS page only
+                '--adjust-extension',     # .html extension
+                '--convert-links',        # Make links work offline
                 '--restrict-file-names=windows',
-                f'--domains={domain}',
-                '--no-parent',
-                '--wait', '1',
-                '--random-wait',
-                '--timeout', '20',
-                '--tries', '2',
-                '--retry-connrefused',
-                f'--quota={max_pages * 500}K',  # STRICT: max_pages * 500KB
-                '--reject-regex', r'\.(webm|mp4|mov|avi|mpeg|mkv|flv|wmv|m4v|ts|mpg|3gp|vob|f4v|wav|mp3|aac|flac|opus)$',  # Block media
+                f'--domains={domain}',    # Stay on domain
+                '--no-parent',            # Don't go up
+                '--wait', '1',            # 1 sec between requests
+                '--random-wait',          # Random delay 0.5-1.5 sec
+                '--timeout', '20',        # 20 sec timeout
+                '--tries', '2',           # 2 retry attempts
+                '--retry-connrefused',    # Retry on refused
+                f'--quota={max_pages * 500}K',  # Hard quota
+                '--reject-regex', r'\.(webm|mp4|mov|avi|mpeg|mkv|flv|wmv|m4v|ts|mpg|3gp|vob|f4v|wav|mp3|aac|flac|opus)$',
                 '--user-agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
                 '-P', str(output_dir),
                 url
             ]
             
-            logger.info(f"🔧 wget params: level=1, quota={max_pages * 500}K, page-requisites only, media rejected")
+            logger.info(f"🔧 wget params: NO recursion (page-requisites only), quota={max_pages * 500}K, media blocked")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -169,7 +164,7 @@ class SiteDownloaderEngine:
                     logger.error(f"wget failed: {stderr.decode()}")
                     return {'success': False, 'error': stderr.decode()}
             
-            logger.info("✅ wget download complete")
+            logger.info("✅ wget download complete (single page + assets only)")
             return {'success': True, 'output_dir': str(output_dir)}
             
         except Exception as e:
@@ -178,7 +173,7 @@ class SiteDownloaderEngine:
     
     async def download_site(self, url: str, max_pages: int = 100) -> dict:
         """🔥 Download full website and save to DB"""
-        logger.info(f"🔥 STARTING FULL WEBSITE DOWNLOAD: {url}")
+        logger.info(f"🔥 STARTING WEBSITE DOWNLOAD: {url}")
         logger.info(f"⚙️  Config: max_pages={max_pages}")
         
         # Validate max_pages
