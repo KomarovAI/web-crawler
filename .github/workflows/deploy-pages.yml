@@ -1,7 +1,7 @@
 # @description Deploys archived website to GitHub Pages gh-pages branch
 # @requires download-site.yml artifact (site-archive-RUN_ID)
 # @outputs GitHub Pages URL, n8n callback with deployment stats, clean gh-pages branch
-# @performs Full repository reset, URL rewriting, WARC cleanup, force push
+# @performs Full repository reset, URL rewriting, WARC cleanup, force push, main branch cleanup
 
 name: Deploy to GitHub Pages
 
@@ -146,6 +146,49 @@ jobs:
           }
           
           echo "✅ Target repository ready"
+
+      - name: Clean main branch - remove old site files
+        env:
+          GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+        continue-on-error: true
+        run: |
+          cd /tmp/target-repo
+          
+          echo "🧹 Cleaning main branch..."
+          
+          # Checkout main branch
+          git fetch origin main 2>/dev/null || true
+          git checkout main 2>/dev/null || {
+            echo "ℹ️  No main branch yet - skipping cleanup"
+            exit 0
+          }
+          
+          # Remove old site directories and files (keep .github, .gitignore, README.md)
+          echo "🗑️  Removing old site data..."
+          find . -maxdepth 1 \
+            -not -name '.git' \
+            -not -name '.github' \
+            -not -name '.gitignore' \
+            -not -name 'README.md' \
+            -not -name '.' \
+            -not -name '..' \
+            \( -type f -o -type d \) \
+            -exec rm -rf {} + 2>/dev/null || true
+          
+          # Check if anything to commit
+          if git diff --cached --quiet && git status --porcelain | grep -q .; then
+            echo "📋 Staging deletions..."
+            git add -A
+            
+            echo "📝 Committing cleanup..."
+            git commit -m "chore(repo): cleanup old site files" -m "Removed old site directories before new deployment" --allow-empty
+            
+            echo "🚀 Pushing to main..."
+            git push origin main
+            echo "✅ Main branch cleaned"
+          else
+            echo "✅ Main branch already clean"
+          fi
 
       - name: Delete old gh-pages branch if exists
         env:
