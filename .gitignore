@@ -1,23 +1,61 @@
-.env
-.env.local
+# Python
 __pycache__/
-*.pyc
-*.pyo
-.venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+PIPFILE.lock
+
+# Virtual environments
 venv/
 env/
-.idea/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
 .vscode/
-*.log
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+*.log
+logs/
+
+# Archives and downloads (from crawler)
+archive_*/
 site_archive/
-*.db
-*.db-wal
-*.db-shm
-archive.db
 *.warc
-*.wacz
-.pytest_cache/
-dist/
-build/
-*.egg-info/
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+.tmp/
+*.tmp
+.cache/
+
+# Environment
+.env
+.env.local
+
