@@ -180,7 +180,7 @@ jobs:
             echo "📋 Staging deletions..."
             git add -A
             
-            echo "📝 Committing cleanup..."
+            echo "📏 Committing cleanup..."
             git commit -m "chore(repo): cleanup old site files" -m "Removed old site directories before new deployment" --allow-empty
             
             echo "🚀 Pushing to main..."
@@ -370,7 +370,7 @@ jobs:
             exit 0
           fi
           
-          echo "📝 Creating commit"
+          echo "📏 Creating commit"
           git commit -m "chore(pages): Deploy ${{ steps.extract.outputs.domain }} (Run #${{ github.event.inputs.source_run_id }})" \
                      -m "Files: ${{ steps.extract.outputs.file_count }} | Size: ${{ steps.extract.outputs.size }}"
           
@@ -385,7 +385,7 @@ jobs:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         continue-on-error: true
         run: |
-          echo "📝 Configuring GitHub Pages..."
+          echo "📏 Configuring GitHub Pages..."
           
           OWNER=$(echo "${{ steps.validate.outputs.target_repo }}" | cut -d/ -f1)
           REPO=$(echo "${{ steps.validate.outputs.target_repo }}" | cut -d/ -f2)
@@ -421,7 +421,18 @@ jobs:
           RESUME_URL="${{ github.event.inputs.resumeUrl }}"
           [ -z "$RESUME_URL" ] && exit 0
           
-          PAYLOAD=$(printf '{\n            "status": "%s",\n            "workflow": "deploy-pages",\n            "run_id": %s,\n            "source_run_id": %s,\n            "target_repo": "%s",\n            "domain": "%s",\n            "original_files": "%s",\n            "original_size": "%s",\n            "pages_url": "https://KomarovAI.github.io/archived-sites/",\n            "timestamp": "%s"\n          }' "${{ job.status }}" "${{ github.run_id }}" "${{ steps.validate.outputs.source_run_id }}" "${{ steps.validate.outputs.target_repo }}" "${{ steps.extract.outputs.domain }}" "${{ steps.extract.outputs.file_count }}" "${{ steps.extract.outputs.size }}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')")
+          PAYLOAD=$(printf '{
+            "status": "%s",
+            "workflow": "deploy-pages",
+            "run_id": %s,
+            "source_run_id": %s,
+            "target_repo": "%s",
+            "domain": "%s",
+            "original_files": "%s",
+            "original_size": "%s",
+            "pages_url": "https://KomarovAI.github.io/archived-sites/",
+            "timestamp": "%s"
+          }' "${{ job.status }}" "${{ github.run_id }}" "${{ steps.validate.outputs.source_run_id }}" "${{ steps.validate.outputs.target_repo }}" "${{ steps.extract.outputs.domain }}" "${{ steps.extract.outputs.file_count }}" "${{ steps.extract.outputs.size }}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')")
           
           curl -k -X POST "$RESUME_URL" \
             -H "Content-Type: application/json" \
