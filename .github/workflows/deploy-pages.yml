@@ -106,8 +106,14 @@ jobs:
           echo "📁 Checking downloaded artifact..."
           ls -la ./artifact-download/ | head -20
           
-          # Find archive directory
-          ARCHIVE_DIR=$(find ./artifact-download -maxdepth 2 -name "archive_*" -type d | head -1)
+          # Try to find archive directory - support multiple formats
+          # Format 1: archive_domain/ (from smart_archiver)
+          ARCHIVE_DIR=$(find ./artifact-download -maxdepth 1 -name "archive_*" -type d | head -1)
+          
+          # Format 2: domain/ (from wget-based download)
+          if [ -z "$ARCHIVE_DIR" ]; then
+            ARCHIVE_DIR=$(find ./artifact-download -maxdepth 1 -type d ! -name "artifact-download" ! -name "." ! -name ".." | head -1)
+          fi
           
           if [ -z "$ARCHIVE_DIR" ]; then
             echo "❌ Archive directory not found"
@@ -120,7 +126,8 @@ jobs:
           
           # Extract domain from archive name
           ARCHIVE_NAME=$(basename "$ARCHIVE_DIR")
-          DOMAIN=$(echo "$ARCHIVE_NAME" | sed 's/archive_//' | sed 's/_/./g')
+          # Remove 'archive_' prefix if exists, then replace underscores with dots
+          DOMAIN=$(echo "$ARCHIVE_NAME" | sed 's/^archive_//' | sed 's/_/./g')
           FILE_COUNT=$(find "$ARCHIVE_DIR" -type f | wc -l)
           SIZE=$(du -sh "$ARCHIVE_DIR" | cut -f1)
           
