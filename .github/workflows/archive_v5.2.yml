@@ -46,7 +46,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -209,9 +209,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          echo "📦 Cloning $TARGET_REPO with gh-pages branch"
+          echo "📆 Cloning $TARGET_REPO with gh-pages branch"
           git clone --depth 1 "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git" . 2>&1 || {
-            echo "🃋 First time - creating new repo structure"
+            echo "🎲 First time - creating new repo structure"
             git init
             git remote add origin "https://oauth2:${GH_TOKEN}@github.com/${TARGET_REPO}.git"
           }
@@ -224,7 +224,7 @@ jobs:
             git checkout --orphan gh-pages
           fi
           
-          echo "🗑️ Clean up old files"
+          echo "🚛 Clean up old files"
           find . -type f ! -path './.git*' ! -name '.gitignore' -delete
           find . -type d ! -path './.git*' -empty -delete
           
