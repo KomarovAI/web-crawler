@@ -8,6 +8,23 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment even if no changes'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      skip_tests:
+        description: 'Skip test step'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 permissions:
   contents: read
@@ -77,6 +94,7 @@ jobs:
     permissions:
       contents: read
     needs: []
+    if: github.event_name != 'workflow_dispatch' || inputs.skip_tests == 'false'
     steps:
       - name: 📁 Checkout code
         uses: actions/checkout@v4
@@ -101,7 +119,9 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: [build]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.force_deploy == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -152,7 +172,9 @@ jobs:
   verify:
     name: Verify Deployment
     needs: [deploy]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.force_deploy == 'true')
     runs-on: ubuntu-latest
     steps:
       - name: 🔍 Check deployment status
@@ -174,3 +196,4 @@ jobs:
 # - Only deploys on main branch push
 # - Permissions correctly scoped per job
 # - Python version pinned for reproducibility
+# - Manual trigger with optional parameters (workflow_dispatch)
