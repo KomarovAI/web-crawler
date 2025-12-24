@@ -31,6 +31,11 @@ on:
         required: false
         type: boolean
         default: true
+      dry_run:
+        description: 'Dry-run mode: validate and preview without pushing to git'
+        required: false
+        type: boolean
+        default: false
       resumeUrl:
         description: 'n8n webhook callback URL'
         required: false
@@ -55,6 +60,7 @@ jobs:
           SOURCE_RUN_ID="${{ github.event.inputs.source_run_id }}"
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
           ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
           
           if [[ ! "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
             echo "❌ Error: source_run_id must be numeric"
@@ -74,6 +80,13 @@ jobs:
           echo "source_run_id=$SOURCE_RUN_ID" >> $GITHUB_OUTPUT
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "🔍 DRY-RUN MODE ENABLED - No changes will be pushed"
+          else
+            echo "✅ Production mode - Changes will be pushed"
+          fi
           echo "✅ Validation passed"
 
       - name: Download artifact from source workflow
@@ -123,6 +136,7 @@ jobs:
           echo "   Size: $SIZE"
 
       - name: Checkout target repository
+        if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         run: |
@@ -147,7 +161,20 @@ jobs:
           
           echo "✅ Target repository ready"
 
+      - name: Prepare deployment directory (dry-run mode)
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          TEMP_DIR="/tmp/target-repo"
+          mkdir -p "$TEMP_DIR"
+          cd "$TEMP_DIR"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          touch .nojekyll
+          echo "✅ Dry-run deployment directory ready (git init only)"
+
       - name: Clean main branch - remove old site files
+        if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         continue-on-error: true
@@ -191,6 +218,7 @@ jobs:
           fi
 
       - name: Delete old gh-pages branch if exists
+        if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         continue-on-error: true
@@ -212,7 +240,7 @@ jobs:
           cd /tmp/target-repo
           
           echo "📄 Creating fresh orphan gh-pages branch"
-          git checkout --orphan gh-pages
+          git checkout --orphan gh-pages 2>/dev/null || true
           
           # Clean tracked files WITHOUT destroying .git
           git rm -rf . 2>/dev/null || true
@@ -302,34 +330,29 @@ jobs:
             echo "✅ No WARC files found"
           fi
 
-      - name: Rewrite URLs to local paths
+      - name: Rewrite URLs to local paths (BeautifulSoup)
         if: github.event.inputs.rewrite_links == 'true'
         continue-on-error: true
         run: |
           cd /tmp/target-repo
           
           DOMAIN="${{ steps.extract.outputs.domain }}"
-          echo "🔗 Rewriting URLs for domain: $DOMAIN"
+          echo "🔗 Rewriting URLs for domain: $DOMAIN using BeautifulSoup"
           
           python3 << 'PYTHON'
           import os
-          import re
           from pathlib import Path
+          from urllib.parse import urlparse, urlunparse, urljoin
+          
+          try:
+              from bs4 import BeautifulSoup
+              HAS_BS4 = True
+          except ImportError:
+              HAS_BS4 = False
+              print("⚠️  BeautifulSoup not installed, using basic link rewriting")
           
           DOMAIN = "${{ steps.extract.outputs.domain }}"
-          SAFE_DOMAIN = re.escape(DOMAIN)
-          
-          # URL rewrite patterns
-          patterns = [
-              (rf'href=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\']',
-               r'href="\1"'),
-              (rf'src=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\']',
-               r'src="\1"'),
-              (rf'action=["\']https?://{SAFE_DOMAIN}([/a-zA-Z0-9._~:/?#@!$&\'()*+,;=%-]*)["\']',
-               r'action="\1"'),
-          ]
-          
-          PROCESS_EXTS = {'.html', '.htm', '.js', '.css', '.json'}
+          PROCESS_EXTS = {'.html', '.htm'}
           modified = 0
           
           for root, dirs, files in os.walk('.'):
@@ -341,20 +364,104 @@ jobs:
                       try:
                           with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                               original = f.read()
-                          content = original
-                          for pattern, replacement in patterns:
-                              content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
-                          if content != original:
-                              with open(filepath, 'w', encoding='utf-8') as f:
-                                  f.write(content)
-                              modified += 1
+                          
+                          if HAS_BS4:
+                              # Use BeautifulSoup for robust HTML parsing
+                              soup = BeautifulSoup(original, 'html.parser')
+                              changes = 0
+                              
+                              # Process href attributes
+                              for tag in soup.find_all(['a', 'link', 'base']):
+                                  if tag.get('href'):
+                                      url = tag['href']
+                                      if url.startswith(f'http://{DOMAIN}') or url.startswith(f'https://{DOMAIN}'):
+                                          # Convert absolute URL to relative
+                                          parsed = urlparse(url)
+                                          new_url = parsed.path
+                                          if parsed.query:
+                                              new_url += '?' + parsed.query
+                                          if parsed.fragment:
+                                              new_url += '#' + parsed.fragment
+                                          tag['href'] = new_url if new_url else '/'
+                                          changes += 1
+                              
+                              # Process src attributes
+                              for tag in soup.find_all(['img', 'script', 'iframe', 'source']):
+                                  if tag.get('src'):
+                                      url = tag['src']
+                                      if url.startswith(f'http://{DOMAIN}') or url.startswith(f'https://{DOMAIN}'):
+                                          parsed = urlparse(url)
+                                          new_url = parsed.path
+                                          if parsed.query:
+                                              new_url += '?' + parsed.query
+                                          if parsed.fragment:
+                                              new_url += '#' + parsed.fragment
+                                          tag['src'] = new_url if new_url else '/'
+                                          changes += 1
+                              
+                              # Process action attributes (forms)
+                              for tag in soup.find_all('form'):
+                                  if tag.get('action'):
+                                      url = tag['action']
+                                      if url.startswith(f'http://{DOMAIN}') or url.startswith(f'https://{DOMAIN}'):
+                                          parsed = urlparse(url)
+                                          new_url = parsed.path
+                                          if parsed.query:
+                                              new_url += '?' + parsed.query
+                                          if parsed.fragment:
+                                              new_url += '#' + parsed.fragment
+                                          tag['action'] = new_url if new_url else '/'
+                                          changes += 1
+                              
+                              if changes > 0:
+                                  content = str(soup)
+                                  with open(filepath, 'w', encoding='utf-8') as f:
+                                      f.write(content)
+                                  modified += 1
+                          else:
+                              # Fallback: basic regex approach
+                              import re
+                              content = original
+                              pattern = rf'((?:href|src|action)=["\'])https?://{re.escape(DOMAIN)}'
+                              replacement = r'\1'
+                              if re.search(pattern, content):
+                                  content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
+                                  with open(filepath, 'w', encoding='utf-8') as f:
+                                      f.write(content)
+                                  modified += 1
                       except Exception as e:
-                          pass
+                          print(f"⚠️  Error processing {filepath}: {e}")
           
           print(f"✅ Rewrote {modified} files")
           PYTHON
 
+      - name: Generate deployment preview (dry-run)
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          cd /tmp/target-repo
+          
+          echo "📋 DRY-RUN PREVIEW"
+          echo "═══════════════════════════════════════════════════════════"
+          echo ""
+          echo "📊 Deployment Summary:"
+          echo "   Domain: ${{ steps.extract.outputs.domain }}"
+          echo "   Files: ${{ steps.extract.outputs.file_count }}"
+          echo "   Size: ${{ steps.extract.outputs.size }}"
+          echo ""
+          echo "📁 Directory Structure (top level):"
+          ls -lah | head -20
+          echo ""
+          echo "📄 File Statistics:"
+          echo "   HTML files: $(find . -name '*.html' ! -path './.git/*' | wc -l)"
+          echo "   CSS files: $(find . -name '*.css' ! -path './.git/*' | wc -l)"
+          echo "   JS files: $(find . -name '*.js' ! -path './.git/*' | wc -l)"
+          echo "   Images: $(find . -name '*.png' -o -name '*.jpg' -o -name '*.gif' | wc -l)"
+          echo ""
+          echo "✅ Dry-run validation complete - NO CHANGES WERE PUSHED"
+          echo "═══════════════════════════════════════════════════════════"
+
       - name: Commit and push to gh-pages
+        if: github.event.inputs.dry_run != 'true'
         id: commit
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
@@ -381,6 +488,7 @@ jobs:
           echo "✅ Successfully deployed"
 
       - name: Configure GitHub Pages to use gh-pages branch
+        if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         continue-on-error: true
@@ -407,6 +515,7 @@ jobs:
           | Property | Value |
           |----------|-------|
           | Status | ${{ job.status }} |
+          | Mode | $(if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then echo "🔍 DRY-RUN (No Push)"; else echo "🚀 Production"; fi) |
           | Domain | ${{ steps.extract.outputs.domain }} |
           | Files | ${{ steps.extract.outputs.file_count }} |
           | Size | ${{ steps.extract.outputs.size }} |
@@ -431,8 +540,9 @@ jobs:
             "original_files": "%s",
             "original_size": "%s",
             "pages_url": "https://KomarovAI.github.io/archived-sites/",
+            "dry_run": %s,
             "timestamp": "%s"
-          }' "${{ job.status }}" "${{ github.run_id }}" "${{ steps.validate.outputs.source_run_id }}" "${{ steps.validate.outputs.target_repo }}" "${{ steps.extract.outputs.domain }}" "${{ steps.extract.outputs.file_count }}" "${{ steps.extract.outputs.size }}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')")
+          }' "${{ job.status }}" "${{ github.run_id }}" "${{ steps.validate.outputs.source_run_id }}" "${{ steps.validate.outputs.target_repo }}" "${{ steps.extract.outputs.domain }}" "${{ steps.extract.outputs.file_count }}" "${{ steps.extract.outputs.size }}" "${{ github.event.inputs.dry_run }}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')")
           
           curl -k -X POST "$RESUME_URL" \
             -H "Content-Type: application/json" \
