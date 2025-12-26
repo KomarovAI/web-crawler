@@ -42,29 +42,29 @@ jobs:
       - name: Validate inputs
         id: validate
         run: |
-          echo "🔍 Validating inputs..."
+          echo '🔍 Validating inputs...'
           
           # Validate artifact name format
           ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
           if [[ ! "$ARTIFACT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-            echo "❌ Invalid artifact name format: $ARTIFACT_NAME"
-            echo "Name must contain only alphanumeric characters, dashes, and underscores"
+            echo '❌ Invalid artifact name format:' "$ARTIFACT_NAME"
+            echo 'Name must contain only alphanumeric characters, dashes, and underscores'
             exit 1
           fi
           
           # Validate target repo format
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
           if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
-            echo "❌ Invalid target repository format: $TARGET_REPO"
-            echo "Format must be: owner/repo"
+            echo '❌ Invalid target repository format:' "$TARGET_REPO"
+            echo 'Format must be: owner/repo'
             exit 1
           fi
           
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
-          echo "✅ Inputs validated successfully"
-          echo "📦 Artifact: $ARTIFACT_NAME"
-          echo "🎯 Target: $TARGET_REPO"
+          echo '✅ Inputs validated successfully'
+          echo '📦 Artifact:' "$ARTIFACT_NAME"
+          echo '🎯 Target:' "$TARGET_REPO"
 
       - name: Download artifact
         id: download
@@ -79,11 +79,11 @@ jobs:
         id: verify
         run: |
           if [ ! -d "site_content" ] || [ -z "$(ls -A "site_content" 2>/dev/null)" ]; then
-            echo "❌ Артефакт не найден или пустой"
-            echo "📋 Проверьте:"
-            echo "   1. Правильность имени артефакта: ${{ steps.validate.outputs.artifact_name }}"
-            echo "   2. Существование артефакта в run: ${{ github.event.inputs.source_run_id || github.run_id }}"
-            echo "   3. Срок хранения артефакта (30 дней)"
+            echo '❌ Артефакт не найден или пустой'
+            echo '📋 Проверьте:'
+            echo '   1. Правильность имени артефакта:' "${{ steps.validate.outputs.artifact_name }}"
+            echo '   2. Существование артефакта в run:' "${{ github.event.inputs.source_run_id || github.run_id }}"
+            echo '   3. Срок хранения артефакта (30 дней)'
             exit 1
           fi
 
@@ -93,8 +93,8 @@ jobs:
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
 
-          echo "✅ Артефакт проверен: $FILE_COUNT файлов | $DIR_SIZE"
-          echo "📁 Содержимое (первые 20 файлов):"
+          echo '✅ Артефакт проверен:' "$FILE_COUNT файлов | $DIR_SIZE"
+          echo '📁 Содержимое (первые 20 файлов):'
           find site_content -type f | head -20
 
       - name: Checkout target repository
@@ -112,7 +112,7 @@ jobs:
           SOURCE_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          echo "🔄 Replacing repository content..."
+          echo '🔄 Replacing repository content...'
 
           # Сохранить важные файлы
           PRESERVE_FILES=(".git" ".github" ".gitignore" "README.md" "LICENSE" "CNAME")
@@ -136,7 +136,7 @@ jobs:
           cp -r ../site_content/* . 2>/dev/null || true
 
           echo "source_repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
-          echo "✅ Repository ready for commit"
+          echo '✅ Repository ready for commit'
 
       - name: Configure git
         run: |
@@ -154,7 +154,7 @@ jobs:
         run: |
           # Проверить изменения
           if git diff --quiet && git diff --cached --quiet; then
-            echo "⚠️ Нет изменений для коммита"
+            echo '⚠️ Нет изменений для коммита'
             echo "status=no_changes" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -178,8 +178,8 @@ Branch: ${TARGET_BRANCH}"
           echo "status=success" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
 
-          echo "✅ Pushed to ${{ steps.validate.outputs.target_repo }}"
-          echo "📝 Commit: $COMMIT_SHA"
+          echo '✅ Pushed to' "${{ steps.validate.outputs.target_repo }}"
+          echo '📝 Commit SHA' "$COMMIT_SHA"
 
       - name: Summary
         if: always()
@@ -187,23 +187,23 @@ Branch: ${TARGET_BRANCH}"
           echo "═══════════════════════════════════════════════════════════════" | tee -a $GITHUB_STEP_SUMMARY
           echo "📊 DEPLOYMENT SUMMARY" | tee -a $GITHUB_STEP_SUMMARY
           echo "═══════════════════════════════════════════════════════════════" | tee -a $GITHUB_STEP_SUMMARY
-          echo "Source Artifact: ${{ steps.validate.outputs.artifact_name }}" | tee -a $GITHUB_STEP_SUMMARY
-          echo "Source Run ID: ${{ github.event.inputs.source_run_id || github.run_id }}" | tee -a $GITHUB_STEP_SUMMARY
-          echo "Target Repository: ${{ steps.validate.outputs.target_repo }}" | tee -a $GITHUB_STEP_SUMMARY
-          echo "Target Branch: ${{ github.event.inputs.target_branch }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Source Artifact:' "${{ steps.validate.outputs.artifact_name }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Source Run ID:' "${{ github.event.inputs.source_run_id || github.run_id }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Target Repository:' "${{ steps.validate.outputs.target_repo }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Target Branch:' "${{ github.event.inputs.target_branch }}" | tee -a $GITHUB_STEP_SUMMARY
           echo "───────────────────────────────────────────────────────────────" | tee -a $GITHUB_STEP_SUMMARY
-          echo "Files Deployed: ${{ steps.verify.outputs.file_count }}" | tee -a $GITHUB_STEP_SUMMARY
-          echo "Archive Size: ${{ steps.verify.outputs.dir_size }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Files Deployed:' "${{ steps.verify.outputs.file_count }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Archive Size:' "${{ steps.verify.outputs.dir_size }}" | tee -a $GITHUB_STEP_SUMMARY
           echo "───────────────────────────────────────────────────────────────" | tee -a $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
-            echo "✅ Status: DEPLOYED SUCCESSFULLY" | tee -a $GITHUB_STEP_SUMMARY
-            echo "Commit SHA: ${{ steps.commit.outputs.commit_sha }}" | tee -a $GITHUB_STEP_SUMMARY
-            echo "🔗 View: https://github.com/${{ steps.validate.outputs.target_repo }}/commit/${{ steps.commit.outputs.commit_sha }}" | tee -a $GITHUB_STEP_SUMMARY
+            echo '✅ Status: DEPLOYED SUCCESSFULLY' | tee -a $GITHUB_STEP_SUMMARY
+            echo 'Commit SHA:' "${{ steps.commit.outputs.commit_sha }}" | tee -a $GITHUB_STEP_SUMMARY
+            echo '🔗 View: https://github.com/${{ steps.validate.outputs.target_repo }}/commit/${{ steps.commit.outputs.commit_sha }}' | tee -a $GITHUB_STEP_SUMMARY
           elif [ "${{ steps.commit.outputs.status }}" = "no_changes" ]; then
-            echo "⚠️ Status: NO CHANGES TO DEPLOY" | tee -a $GITHUB_STEP_SUMMARY
+            echo '⚠️ Status: NO CHANGES TO DEPLOY' | tee -a $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Status: FAILED" | tee -a $GITHUB_STEP_SUMMARY
+            echo '❌ Status: FAILED' | tee -a $GITHUB_STEP_SUMMARY
           fi
 
           echo "═══════════════════════════════════════════════════════════════" | tee -a $GITHUB_STEP_SUMMARY
