@@ -86,22 +86,22 @@ jobs:
       target_repo: ${{ steps.resolve.outputs.target_repo }}
       artifact_id_resolved: ${{ steps.resolve.outputs.artifact_id }}
     steps:
-      - name: 🔒 Security Check: Prevent same repo deployment
+      - name: Security Check - Prevent same repo deployment
         id: safety
         run: |
           TARGET_REPO="${{ inputs.target_repository }}"
           CURRENT_REPO="${{ env.CURRENT_REPO }}"
           
-          echo "🔒 SAFETY VALIDATION"
+          echo "SAFETY VALIDATION"
           echo "=================="
           echo "Current Repository: $CURRENT_REPO"
           echo "Target Repository:  $TARGET_REPO"
           echo ""
           
           if [ "$TARGET_REPO" = "$CURRENT_REPO" ]; then
-            echo "❌ ❌ DEPLOYMENT BLOCKED! ❌"
+            echo "DEPLOYMENT BLOCKED!"
             echo ""
-            echo "⚠️  CRITICAL SECURITY ERROR:"
+            echo "CRITICAL SECURITY ERROR:"
             echo "You are trying to deploy to the SAME repository!"
             echo ""
             echo "This workflow CLEARS the target repository before deployment."
@@ -110,26 +110,26 @@ jobs:
             echo "Current Repo:  $CURRENT_REPO"
             echo "Target Repo:   $TARGET_REPO"
             echo ""
-            echo "✅ SOLUTION:"
+            echo "SOLUTION:"
             echo "   Deploy to a DIFFERENT repository (pages-only repo)"
             echo ""
-            echo "❌ BANNED REPOSITORIES:"
+            echo "BANNED REPOSITORIES:"
             echo "   - $CURRENT_REPO"
             echo ""
-            echo "✅ EXAMPLES OF ALLOWED TARGETS:"
+            echo "EXAMPLES OF ALLOWED TARGETS:"
             echo "   - KomarovAI/KomarovAI.github.io"
             echo "   - KomarovAI/web-pages"
             echo "   - username/pages-deployment"
             exit 1
           fi
           
-          echo "✅ Safety check PASSED - Different repositories"
+          echo "Safety check PASSED - Different repositories"
           echo ""
 
-      - name: 🔍 Validate workflow inputs
+      - name: Validate workflow inputs
         id: resolve
         run: |
-          echo "📋 Workflow Parameters:"
+          echo "Workflow Parameters:"
           echo "  Target Repository: ${{ inputs.target_repository }}"
           echo "  Artifact ID: ${{ inputs.artifact_id }}"
           echo "  Artifact Source: ${{ inputs.artifact_source }}"
@@ -142,35 +142,35 @@ jobs:
           
           TARGET_REPO="${{ inputs.target_repository }}"
           if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
-            echo "❌ ERROR: Invalid repository format: $TARGET_REPO"
+            echo "ERROR: Invalid repository format: $TARGET_REPO"
             echo "Use format: owner/repo (e.g., KomarovAI/web-pages)"
             exit 1
           fi
-          echo "✅ Target repository validated: $TARGET_REPO"
+          echo "Target repository validated: $TARGET_REPO"
           
           ARTIFACT_ID="${{ inputs.artifact_id }}"
           if [ -z "$ARTIFACT_ID" ]; then
             ARTIFACT_ID="current-run"
-            echo "📦 Artifact ID: Using current workflow run"
+            echo "Artifact ID: Using current workflow run"
           else
-            echo "📦 Artifact ID: $ARTIFACT_ID"
+            echo "Artifact ID: $ARTIFACT_ID"
           fi
           
           if [ -n "${{ inputs.custom_artifact_path }}" ]; then
             ARTIFACT_PATH="${{ inputs.custom_artifact_path }}"
-            echo "✅ Using custom artifact path: $ARTIFACT_PATH"
+            echo "Using custom artifact path: $ARTIFACT_PATH"
           else
             case "${{ inputs.artifact_source }}" in
               "auto")
                 ARTIFACT_PATH="auto-detect"
-                echo "🔄 Auto-detect mode enabled (will check: public → build → docs → dist)"
+                echo "Auto-detect mode enabled (will check: public, build, docs, dist)"
                 ;;
               "public"|"docs"|"build"|"dist"|"website")
                 ARTIFACT_PATH="${{ inputs.artifact_source }}"
-                echo "✅ Using artifact source: $ARTIFACT_PATH"
+                echo "Using artifact source: $ARTIFACT_PATH"
                 ;;
               *)
-                echo "❌ ERROR: Unknown artifact source: ${{ inputs.artifact_source }}"
+                echo "ERROR: Unknown artifact source: ${{ inputs.artifact_source }}"
                 exit 1
                 ;;
             esac
@@ -183,16 +183,16 @@ jobs:
           
           case "${{ inputs.target_environment }}" in
             "production"|"staging"|"development"|"preview")
-              echo "✅ Environment validated: ${{ inputs.target_environment }}"
+              echo "Environment validated: ${{ inputs.target_environment }}"
               ;;
             *)
-              echo "❌ ERROR: Invalid environment"
+              echo "ERROR: Invalid environment"
               exit 1
               ;;
           esac
           
           echo ""
-          echo "🚀 Deployment configuration:"
+          echo "Deployment configuration:"
           echo "   Repository: $TARGET_REPO"
           echo "   Environment: ${{ inputs.target_environment }}"
           echo "   Artifact: $ARTIFACT_ID"
@@ -204,24 +204,24 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: 📁 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 📈 Setup Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install beautifulsoup4 requests
 
-      - name: 📁 Create build output directory
+      - name: Create build output directory
         run: mkdir -p build/
 
-      - name: 🔨 Run custom build command
+      - name: Run custom build command
         if: inputs.build_command != ''
         run: |
           echo "Running custom build command:"
@@ -229,7 +229,7 @@ jobs:
           eval "${{ inputs.build_command }}"
         continue-on-error: true
 
-      - name: 💨 Run URL rewriter
+      - name: Run URL rewriter
         run: |
           if [ -d "public" ]; then
             python scripts/url_rewriter_optimized.py example.com -d public -v || true
@@ -237,14 +237,14 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: 🔔 Verify build output
+      - name: Verify build output
         run: |
           echo "Build directory contents:"
           find build/ -type f | head -20
           echo "Total files in build:"
           find build/ -type f | wc -l
 
-      - name: 📂 Cache build artifacts
+      - name: Cache build artifacts
         uses: actions/cache@v3
         with:
           path: build/
@@ -260,21 +260,21 @@ jobs:
     needs: [build]
     if: inputs.skip_tests != 'true'
     steps:
-      - name: 📁 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 📈 Setup Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
-      - name: 📦 Install test dependencies
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pytest beautifulsoup4 requests
 
-      - name: 🪧 Run unit tests
+      - name: Run unit tests
         run: |
           python -m pytest tests/ -v --tb=short 2>/dev/null || python -m unittest discover tests/ -v || echo "Tests completed with warnings"
         continue-on-error: true
@@ -293,10 +293,10 @@ jobs:
     outputs:
       page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: 📁 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 📂 Restore build artifacts
+      - name: Restore build artifacts
         uses: actions/cache@v3
         with:
           path: build/
@@ -304,7 +304,7 @@ jobs:
           restore-keys: |
             build-cache-
 
-      - name: 📁 Prepare deployment directory
+      - name: Prepare deployment directory
         run: |
           ARTIFACT_SOURCE="${{ inputs.artifact_source }}"
           CUSTOM_PATH="${{ inputs.custom_artifact_path }}"
@@ -312,43 +312,43 @@ jobs:
           TARGET_REPO="${{ needs.validate.outputs.target_repo }}"
           ARTIFACT_ID="${{ needs.validate.outputs.artifact_id_resolved }}"
           
-          echo "📦 Deployment Info:"
+          echo "Deployment Info:"
           echo "   Target Repo: $TARGET_REPO"
           echo "   Artifact ID: $ARTIFACT_ID"
           echo ""
           
           if [ -n "$CUSTOM_PATH" ]; then
-            echo "📦 Using custom artifact path: $CUSTOM_PATH"
+            echo "Using custom artifact path: $CUSTOM_PATH"
             if [ -d "$CUSTOM_PATH" ]; then
               cp -r "$CUSTOM_PATH"/* build/ 2>/dev/null || true
             else
-              echo "⚠️  Custom path not found: $CUSTOM_PATH"
+              echo "Custom path not found: $CUSTOM_PATH"
             fi
           else
             case "$ARTIFACT_SOURCE" in
               "auto")
-                echo "🔄 Auto-detecting artifact source..."
+                echo "Auto-detecting artifact source..."
                 for dir in public build docs dist website; do
                   if [ -d "$dir" ] && [ -n "$(ls -A $dir 2>/dev/null)" ]; then
-                    echo "✅ Found artifact in '$dir' directory"
+                    echo "Found artifact in '$dir' directory"
                     cp -r "$dir"/* build/ 2>/dev/null || true
                     break
                   fi
                 done
                 ;;
               *)
-                echo "📦 Using artifact source: $ARTIFACT_SOURCE"
+                echo "Using artifact source: $ARTIFACT_SOURCE"
                 if [ -d "$ARTIFACT_SOURCE" ]; then
                   cp -r "$ARTIFACT_SOURCE"/* build/ 2>/dev/null || true
                 else
-                  echo "⚠️  Artifact source not found: $ARTIFACT_SOURCE"
+                  echo "Artifact source not found: $ARTIFACT_SOURCE"
                 fi
                 ;;
             esac
           fi
           
           if [ ! -d "build" ] || [ -z "$(ls -A build/ 2>/dev/null)" ]; then
-            echo "⚠️  Build directory empty, attempting secondary fallback..."
+            echo "Build directory empty, attempting secondary fallback..."
             if [ -d "public" ]; then
               echo "Using 'public' directory"
               cp -r public/* build/ 2>/dev/null || true
@@ -357,13 +357,13 @@ jobs:
           
           FILE_COUNT=$(find build/ -type f 2>/dev/null | wc -l)
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "❌ ERROR: No files found in build directory!"
+            echo "ERROR: No files found in build directory!"
             echo "Available directories:"
             ls -lA
             exit 1
           fi
           
-          echo "✅ Deployment ready with $FILE_COUNT files"
+          echo "Deployment ready with $FILE_COUNT files"
           if [ "$VERBOSE" = "true" ]; then
             echo "Full contents:"
             find build/ -type f
@@ -372,15 +372,15 @@ jobs:
             find build/ -type f | head -15
           fi
 
-      - name: 📈 Setup Pages
+      - name: Setup Pages
         uses: actions/configure-pages@v3
 
-      - name: 📂 Upload artifacts
+      - name: Upload artifacts
         uses: actions/upload-pages-artifact@v2
         with:
           path: 'build/'
 
-      - name: 🚀 Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v2
         with:
@@ -391,7 +391,7 @@ jobs:
     needs: [deploy, validate]
     runs-on: ubuntu-latest
     steps:
-      - name: 🔍 Verify Pages deployment
+      - name: Verify Pages deployment
         run: |
           PAGE_URL="${{ needs.deploy.outputs.page_url }}"
           ENVIRONMENT="${{ inputs.target_environment }}"
@@ -399,14 +399,14 @@ jobs:
           ARTIFACT_ID="${{ needs.validate.outputs.artifact_id_resolved }}"
           
           if [ -z "$PAGE_URL" ]; then
-            echo "❌ ERROR: Deployment URL not found!"
+            echo "ERROR: Deployment URL not found!"
             exit 1
           fi
           
-          echo "✅ Deployment successful!"
-          echo "📍 Target Repository: $TARGET_REPO"
-          echo "📦 Artifact ID: $ARTIFACT_ID"
-          echo "📋 Environment: ${ENVIRONMENT:-production}"
-          echo "🌐 Pages URL: $PAGE_URL"
+          echo "Deployment successful!"
+          echo "Target Repository: $TARGET_REPO"
+          echo "Artifact ID: $ARTIFACT_ID"
+          echo "Environment: ${ENVIRONMENT:-production}"
+          echo "Pages URL: $PAGE_URL"
           echo ""
           echo "Repository settings: Pages deployment completed"
