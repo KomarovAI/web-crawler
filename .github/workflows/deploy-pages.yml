@@ -411,10 +411,26 @@ jobs:
             find build/ -type f | head -15
           fi
 
-      - name: Setup Pages with External PAT and Enablement
+      - name: Enable GitHub Pages via API
+        run: |
+          TARGET_REPO="${{ needs.validate.outputs.target_repo }}"
+          TOKEN="${{ secrets.EXTERNAL_REPO_PAT }}"
+          
+          echo "Enabling GitHub Pages for: $TARGET_REPO"
+          
+          curl -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$TARGET_REPO/pages" \
+            -d '{"build_type":"workflow","source":{"branch":"gh-pages","path":"/"}}' \
+            -w "\nHTTP Status: %{http_code}\n" || true
+          
+          echo ""
+          echo "Pages enablement attempt completed"
+          echo "Note: If Pages was already enabled, this request will return 409 (Conflict)"
+
+      - name: Setup Pages with External PAT
         uses: actions/configure-pages@v3
-        with:
-          enablement: true
         env:
           GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
 
