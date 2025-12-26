@@ -35,7 +35,7 @@ jobs:
     name: Deploy Website to Target Repository
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       actions: read
 
     steps:
@@ -72,9 +72,7 @@ jobs:
         with:
           name: ${{ steps.validate.outputs.artifact_name }}
           path: site_content
-          # Если указан source_run_id, используем его для cross-run загрузки
           run-id: ${{ github.event.inputs.source_run_id || github.run_id }}
-          # КРИТИЧЕСКИ ВАЖНО: github-token нужен для загрузки из другого workflow run
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify artifact
