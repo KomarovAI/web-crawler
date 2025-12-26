@@ -52,10 +52,10 @@ jobs:
 
           FILE_COUNT=$(find site_content -type f | wc -l)
           DIR_SIZE=$(du -sh site_content | cut -f1)
-          
+
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
-          
+
           echo "✅ Артефакт проверен: $FILE_COUNT файлов | $DIR_SIZE"
           ls -la site_content | head -20
 
@@ -76,7 +76,7 @@ jobs:
         run: |
           # Очистить и скопировать контент
           echo "🔄 Replacing repository content..."
-          
+
           # Сохранить важные файлы
           PRESERVE_FILES=(".git" ".github" ".gitignore" "README.md" "LICENSE" "CNAME")
           for file in "${PRESERVE_FILES[@]}"; do
@@ -84,22 +84,22 @@ jobs:
               mv "$file" "/tmp/${file##*/}.bak"
             fi
           done
-          
+
           # Удалить всё остальное
           find . -mindepth 1 -maxdepth 1 -not -name '.*' -exec rm -rf {} +
-          
+
           # Восстановить важные файлы
           for file in "${PRESERVE_FILES[@]}"; do
             if [ -e "/tmp/${file##*/}.bak" ]; then
               mv "/tmp/${file##*/}.bak" "$file"
             fi
           done
-          
+
           # Скопировать новый контент
           cp -r ../site_content/* .
-          
+
           echo "source_repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
-          
+
           echo "✅ Repository ready for commit"
 
       - name: Configure git
@@ -124,22 +124,22 @@ jobs:
 
           # Добавить все файлы
           git add -A
-          
+
           # Создать сообщение коммита с деталями
           FULL_MSG="${COMMIT_MSG}
 
-Source: ${SOURCE_REPO}
-Run ID: ${RUN_ID}
-Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
-Branch: ${TARGET_BRANCH}"
-          
+          Source: ${SOURCE_REPO}
+          Run ID: ${RUN_ID}
+          Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          Branch: ${TARGET_BRANCH}"
+
           git commit -m "$FULL_MSG"
           git push origin "${TARGET_BRANCH}"
-          
+
           COMMIT_SHA=$(git rev-parse HEAD)
           echo "status=success" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
-          
+
           echo "✅ Pushed to ${{ github.event.inputs.target_repo }}"
 
       - name: Summary
@@ -155,7 +155,7 @@ Branch: ${TARGET_BRANCH}"
           echo "Files Deployed: ${{ steps.verify.outputs.file_count }}"
           echo "Archive Size: ${{ steps.verify.outputs.dir_size }}"
           echo "───────────────────────────────────────────────────────────────"
-          
+
           if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
             echo "✅ Status: DEPLOYED SUCCESSFULLY"
             echo "Commit SHA: ${{ steps.commit.outputs.commit_sha }}"
@@ -164,5 +164,5 @@ Branch: ${TARGET_BRANCH}"
           else
             echo "❌ Status: FAILED"
           fi
-          
+
           echo "═══════════════════════════════════════════════════════════════"
