@@ -1,168 +1,172 @@
-name: Deploy to GitHub Pages
+name: Deploy Website to Repository
 
 on:
   workflow_dispatch:
     inputs:
-      artifact_source:
-        description: 'Artifact source directory'
+      artifact_id:
+        description: 'ID артефакта из download-site workflow (найти в summary предыдущего run)'
         required: true
-        default: 'auto'
-        type: choice
-        options:
-          - auto
-          - public
-          - docs
-          - build
-          - dist
-          - website
-      retention_days:
-        description: 'Artifact retention days (1-90)'
-        required: false
-        default: '30'
         type: string
-  push:
-    branches:
-      - main
-    paths:
-      - 'public/**'
-      - 'docs/**'
-      - 'build/**'
-      - 'dist/**'
-      - 'website/**'
-      - '.github/workflows/deploy-pages.yml'
+      target_repo:
+        description: 'Целевой репозиторий (формат: owner/repo)'
+        required: true
+        type: string
+      target_branch:
+        description: 'Целевая ветка (default: main)'
+        required: false
+        default: 'main'
+        type: string
+      commit_message:
+        description: 'Сообщение коммита'
+        required: false
+        default: 'chore: deploy website'
+        type: string
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
-env:
-  ARTIFACT_PATH: _site
+  actions: read
 
 jobs:
-  prepare:
-    name: Prepare Artifacts
+  deploy:
+    name: Deploy Website to Target Repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    outputs:
-      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      actions: read
+
     steps:
-      - name: Checkout repository
+      - name: Download artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.inputs.artifact_id }}
+          path: site_content
+
+      - name: Verify artifact
+        id: verify
+        run: |
+          if [ ! -d "site_content" ] || [ -z "$(ls -A "site_content" 2>/dev/null)" ]; then
+            echo "❌ Артефакт не найден или пустой"
+            exit 1
+          fi
+
+          FILE_COUNT=$(find site_content -type f | wc -l)
+          DIR_SIZE=$(du -sh site_content | cut -f1)
+          
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
+          
+          echo "✅ Артефакт проверен: $FILE_COUNT файлов | $DIR_SIZE"
+          ls -la site_content | head -20
+
+      - name: Checkout target repository
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.inputs.target_repo }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 1
 
-      - name: Prepare deployment directory
+      - name: Prepare deployment
         id: prepare
+        env:
+          TARGET_REPO: ${{ github.event.inputs.target_repo }}
+          SOURCE_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -e
-          mkdir -p "${{ env.ARTIFACT_PATH }}"
+          # Очистить и скопировать контент
+          echo "🔄 Replacing repository content..."
           
-          # Determine source directory
-          if [ "${{ github.event_name }}" = "push" ]; then
-            SOURCE="auto"
+          # Сохранить важные файлы
+          PRESERVE_FILES=(".git" ".github" ".gitignore" "README.md" "LICENSE" "CNAME")
+          for file in "${PRESERVE_FILES[@]}"; do
+            if [ -e "$file" ]; then
+              mv "$file" "/tmp/${file##*/}.bak"
+            fi
+          done
+          
+          # Удалить всё остальное
+          find . -mindepth 1 -maxdepth 1 -not -name '.*' -exec rm -rf {} +
+          
+          # Восстановить важные файлы
+          for file in "${PRESERVE_FILES[@]}"; do
+            if [ -e "/tmp/${file##*/}.bak" ]; then
+              mv "/tmp/${file##*/}.bak" "$file"
+            fi
+          done
+          
+          # Скопировать новый контент
+          cp -r ../site_content/* .
+          
+          echo "source_repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
+          echo "source_url=$SOURCE_URL" >> $GITHUB_OUTPUT
+          
+          echo "✅ Repository ready for commit"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push
+        id: commit
+        env:
+          COMMIT_MSG: ${{ github.event.inputs.commit_message }}
+          TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
+          SOURCE_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Проверить изменения
+          if git diff --quiet; then
+            echo "⚠️  Нет изменений для коммита"
+            echo "status=no_changes" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Добавить все файлы
+          git add -A
+          
+          # Создать сообщение коммита с деталями
+          FULL_MSG="${COMMIT_MSG}
+
+Source: ${SOURCE_REPO}
+Run ID: ${RUN_ID}
+Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+Branch: ${TARGET_BRANCH}"
+          
+          git commit -m "$FULL_MSG"
+          git push origin "${TARGET_BRANCH}"
+          
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "commit_url=$(git config --get remote.origin.url | sed 's/.git$/\/commit\/'/)$COMMIT_SHA" >> $GITHUB_OUTPUT
+          
+          echo "✅ Pushed to ${{ github.event.inputs.target_repo }}"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "📊 DEPLOYMENT SUMMARY"
+          echo "═══════════════════════════════════════════════════════"
+          echo "Source Artifact ID: ${{ github.event.inputs.artifact_id }}"
+          echo "Target Repository: ${{ github.event.inputs.target_repo }}"
+          echo "Target Branch: ${{ github.event.inputs.target_branch }}"
+          echo "───────────────────────────────────────────────────────"
+          echo "Files Deployed: ${{ steps.verify.outputs.file_count }}"
+          echo "Archive Size: ${{ steps.verify.outputs.dir_size }}"
+          echo "───────────────────────────────────────────────────────"
+          
+          if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
+            echo "✅ Status: DEPLOYED SUCCESSFULLY"
+            echo "Commit SHA: ${{ steps.commit.outputs.commit_sha }}"
+            echo "Commit URL: ${{ steps.commit.outputs.commit_url }}"
+          elif [ "${{ steps.commit.outputs.status }}" = "no_changes" ]; then
+            echo "⚠️  Status: NO CHANGES TO DEPLOY"
           else
-            SOURCE="${{ inputs.artifact_source }}"
+            echo "❌ Status: FAILED"
           fi
           
-          FOUND=0
-          
-          if [ "$SOURCE" = "auto" ]; then
-            echo "🔍 Auto-detecting artifact directory..."
-            for dir in public docs build dist website; do
-              if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-                echo "✅ Found content in: $dir"
-                cp -r "$dir"/* "${{ env.ARTIFACT_PATH }}/"
-                FOUND=1
-                break
-              fi
-            done
-          elif [ -d "$SOURCE" ] && [ -n "$(ls -A "$SOURCE" 2>/dev/null)" ]; then
-            echo "✅ Using specified source: $SOURCE"
-            cp -r "$SOURCE"/* "${{ env.ARTIFACT_PATH }}/"
-            FOUND=1
-          fi
-          
-          if [ $FOUND -eq 0 ]; then
-            echo "⚠️ No artifacts found. Creating fallback content..."
-            cat > "${{ env.ARTIFACT_PATH }}/index.html" << 'FALLBACK_EOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Deployment Success</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .container {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-      max-width: 600px;
-      text-align: center;
-    }
-    h1 { color: #333; margin-bottom: 0.5rem; }
-    p { color: #666; line-height: 1.6; margin: 0.5rem 0; }
-    .meta { background: #f5f5f5; padding: 1rem; border-radius: 4px; margin-top: 1rem; font-family: monospace; font-size: 0.85rem; }
-    .status { color: #28a745; font-weight: bold; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>🚀 Deployment Successful</h1>
-    <p class="status">Site is live and ready to serve</p>
-    <div class="meta">
-      <p>Repository: ${{ github.repository }}</p>
-      <p>Run: ${{ github.run_number }}</p>
-      <p>Branch: ${{ github.ref_name }}</p>
-    </div>
-  </div>
-</body>
-</html>
-FALLBACK_EOF
-          fi
-
-      - name: Upload Pages artifact
-        id: upload
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ${{ env.ARTIFACT_PATH }}
-          retention-days: ${{ inputs.retention_days || 30 }}
-
-  deploy:
-    name: Deploy to GitHub Pages
-    needs: prepare
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-        with:
-          artifact_id: ${{ needs.prepare.outputs.artifact_id }}
-
-      - name: ✅ Deployment Complete
-        run: |
-          echo "🎉 Deployment successful!"
-          echo "📌 Artifact ID: ${{ needs.prepare.outputs.artifact_id }}"
-          echo "🌐 Page URL: ${{ steps.deployment.outputs.page_url }}"
+          echo "═══════════════════════════════════════════════════════"
