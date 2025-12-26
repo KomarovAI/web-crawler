@@ -72,7 +72,7 @@ jobs:
 
           # Validate URL
           if [[ ! "$INPUT_URL" =~ ^https?:// ]]; then
-            echo "❌ URL must start with http:// or https://"
+            echo "❌ URL must start with http" "// or https" "//"
             exit 1
           fi
 
@@ -101,7 +101,7 @@ jobs:
           
           # Log validation result
           DOMAIN=$(echo "$INPUT_URL" | sed 's|https://||g' | sed 's|http://||g' | cut -d'/' -f1)
-          echo "📋 Input validated: $DOMAIN | depth=$INPUT_DEPTH | $LEVEL_DESC"
+          echo "📋 Input validated" "$DOMAIN | depth=$INPUT_DEPTH | $LEVEL_DESC"
 
       - name: Download site with wget
         id: download
@@ -113,7 +113,7 @@ jobs:
           set -e
           mkdir -p "$OUTPUT_DIR"
           
-          echo "🌐 Starting download from: $URL"
+          echo "🌐 Starting download from" "$URL"
           START_TIME=$(date +%s)
           
           # Download with wget - optimized flags
@@ -137,7 +137,7 @@ jobs:
           echo "elapsed_time=$ELAPSED" >> $GITHUB_OUTPUT
           
           if [[ $WGET_EXIT -eq 0 || $WGET_EXIT -eq 8 ]]; then
-            echo "✅ Download completed (${ELAPSED}s) - Exit code: $WGET_EXIT"
+            echo "✅ Download completed (${ELAPSED}s) - Exit code" "$WGET_EXIT"
           else
             echo "⚠️ Download completed with exit code $WGET_EXIT (${ELAPSED}s)"
           fi
@@ -167,7 +167,7 @@ jobs:
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
           echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
           
-          echo "📦 Archive verified: $FILE_COUNT files | $DIR_SIZE"
+          echo "📦 Archive verified" "$FILE_COUNT files | $DIR_SIZE"
           find "$OUTPUT_DIR" -type f | head -20
 
       - name: Upload artifact
