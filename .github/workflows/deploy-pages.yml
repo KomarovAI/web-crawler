@@ -3,10 +3,6 @@
 name: Deploy to GitHub Pages (Optimized)
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       artifact_source:
@@ -41,14 +37,6 @@ on:
         required: false
         type: string
         default: ''
-      force_deploy:
-        description: 'Force deployment even if no changes'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
       skip_tests:
         description: 'Skip test step'
         required: false
@@ -84,7 +72,6 @@ jobs:
   validate:
     name: Validate Parameters
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
     outputs:
       artifact_path: ${{ steps.resolve.outputs.artifact_path }}
       environment: ${{ steps.resolve.outputs.environment }}
@@ -97,7 +84,6 @@ jobs:
           echo "  Target Environment: ${{ inputs.target_environment }}"
           echo "  Custom Path: ${{ inputs.custom_artifact_path }}"
           echo "  Build Command: ${{ inputs.build_command }}"
-          echo "  Force Deploy: ${{ inputs.force_deploy }}"
           echo "  Skip Tests: ${{ inputs.skip_tests }}"
           echo "  Verbose Logging: ${{ inputs.verbose_logging }}"
           echo ""
@@ -162,7 +148,7 @@ jobs:
         run: mkdir -p build/
 
       - name: 🔨 Run custom build command
-        if: github.event_name == 'workflow_dispatch' && inputs.build_command != ''
+        if: inputs.build_command != ''
         run: |
           echo "Running custom build command:"
           echo "${{ inputs.build_command }}"
@@ -224,9 +210,6 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: [build, test]
-    if: |
-      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch' && inputs.force_deploy == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -327,9 +310,6 @@ jobs:
   verify:
     name: Verify Deployment
     needs: [deploy]
-    if: |
-      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch' && inputs.force_deploy == 'true')
     runs-on: ubuntu-latest
     steps:
       - name: 🔍 Verify Pages deployment
@@ -348,13 +328,15 @@ jobs:
           echo "Repository settings: Pages deployment completed"
 
 # Workflow Summary:
-# 1. Validate: Checks workflow parameters (only on manual trigger)
+# 1. Validate: Checks workflow parameters
 # 2. Build: Prepares static files and runs URL rewriter
-# 3. Test: Runs unit tests (depends on build, can be skipped via workflow_dispatch)
-# 4. Deploy: Uploads artifacts to GitHub Pages (requires successful build and test)
+# 3. Test: Runs unit tests (can be skipped via workflow_dispatch)
+# 4. Deploy: Uploads artifacts to GitHub Pages
 # 5. Verify: Confirms successful deployment with actual URL validation
 #
 # Key Features:
+# - ONLY MANUAL TRIGGER via workflow_dispatch
+# - NO automatic push/PR triggers
 # - Multiple artifact source options (auto, public, docs, build, dist, website)
 # - Custom artifact path support for flexibility
 # - Environment selection (production, staging, development, preview)
@@ -362,4 +344,4 @@ jobs:
 # - Verbose logging option
 # - Auto-detection of artifact directory
 # - Comprehensive error handling and validation
-# - Clear parameter validation on manual triggers
+# - Clear parameter validation on startup
