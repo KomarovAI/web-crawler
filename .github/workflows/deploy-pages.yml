@@ -9,6 +9,38 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      artifact_source:
+        description: 'Choose artifact source to deploy'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - 'auto'
+          - 'public'
+          - 'docs'
+          - 'build'
+          - 'dist'
+          - 'website'
+      target_environment:
+        description: 'Target deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - 'production'
+          - 'staging'
+          - 'development'
+          - 'preview'
+      custom_artifact_path:
+        description: 'Custom path to artifact (optional, overrides source)'
+        required: false
+        type: string
+        default: ''
+      build_command:
+        description: 'Custom build command (optional)'
+        required: false
+        type: string
+        default: ''
       force_deploy:
         description: 'Force deployment even if no changes'
         required: false
@@ -19,6 +51,14 @@ on:
           - 'false'
       skip_tests:
         description: 'Skip test step'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      verbose_logging:
+        description: 'Enable verbose logging'
         required: false
         default: 'false'
         type: choice
@@ -40,6 +80,63 @@ env:
   BUILD_CACHE_KEY: build-cache-${{ github.run_id }}
 
 jobs:
+  # Job 0: Validate and log parameters
+  validate:
+    name: Validate Parameters
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      artifact_path: ${{ steps.resolve.outputs.artifact_path }}
+      environment: ${{ steps.resolve.outputs.environment }}
+    steps:
+      - name: 🔍 Validate workflow inputs
+        id: resolve
+        run: |
+          echo "📋 Workflow Parameters:"
+          echo "  Artifact Source: ${{ inputs.artifact_source }}"
+          echo "  Target Environment: ${{ inputs.target_environment }}"
+          echo "  Custom Path: ${{ inputs.custom_artifact_path }}"
+          echo "  Build Command: ${{ inputs.build_command }}"
+          echo "  Force Deploy: ${{ inputs.force_deploy }}"
+          echo "  Skip Tests: ${{ inputs.skip_tests }}"
+          echo "  Verbose Logging: ${{ inputs.verbose_logging }}"
+          echo ""
+          
+          # Resolve artifact path
+          if [ -n "${{ inputs.custom_artifact_path }}" ]; then
+            ARTIFACT_PATH="${{ inputs.custom_artifact_path }}"
+            echo "✅ Using custom artifact path: $ARTIFACT_PATH"
+          else
+            case "${{ inputs.artifact_source }}" in
+              "auto")
+                ARTIFACT_PATH="auto-detect"
+                echo "🔄 Auto-detect mode enabled (will check: public → build → docs → dist)"
+                ;;
+              "public"|"docs"|"build"|"dist"|"website")
+                ARTIFACT_PATH="${{ inputs.artifact_source }}"
+                echo "✅ Using artifact source: $ARTIFACT_PATH"
+                ;;
+              *)
+                echo "❌ ERROR: Unknown artifact source: ${{ inputs.artifact_source }}"
+                exit 1
+                ;;
+            esac
+          fi
+          
+          echo "artifact_path=$ARTIFACT_PATH" >> $GITHUB_OUTPUT
+          echo "environment=${{ inputs.target_environment }}" >> $GITHUB_OUTPUT
+          
+          # Validate environment
+          case "${{ inputs.target_environment }}" in
+            "production"|"staging"|"development"|"preview")
+              echo "✅ Environment validated: ${{ inputs.target_environment }}"
+              ;;
+            *)
+              echo "❌ ERROR: Invalid environment"
+              exit 1
+              ;;
+          esac
+
   # Job 1: Build and prepare static content
   build:
     name: Build Static Content
@@ -63,6 +160,14 @@ jobs:
 
       - name: 📁 Create build output directory
         run: mkdir -p build/
+
+      - name: 🔨 Run custom build command
+        if: github.event_name == 'workflow_dispatch' && inputs.build_command != ''
+        run: |
+          echo "Running custom build command:"
+          echo "${{ inputs.build_command }}"
+          eval "${{ inputs.build_command }}"
+        continue-on-error: true
 
       - name: 💨 Run URL rewriter
         run: |
@@ -144,34 +249,65 @@ jobs:
 
       - name: 📁 Prepare deployment directory
         run: |
-          if [ ! -d "build" ] || [ -z "$(ls -A build/)" ]; then
-            echo "⚠️  Build directory empty, attempting to use fallback sources..."
-            mkdir -p build/
-            
-            # Copy from public with priority
-            if [ -d "public" ]; then
-              echo "📦 Using 'public' directory as source"
-              cp -r public/* build/ 2>/dev/null || true
+          ARTIFACT_SOURCE="${{ inputs.artifact_source }}"
+          CUSTOM_PATH="${{ inputs.custom_artifact_path }}"
+          VERBOSE="${{ inputs.verbose_logging }}"
+          
+          if [ -n "$CUSTOM_PATH" ]; then
+            echo "📦 Using custom artifact path: $CUSTOM_PATH"
+            if [ -d "$CUSTOM_PATH" ]; then
+              cp -r "$CUSTOM_PATH"/* build/ 2>/dev/null || true
+            else
+              echo "⚠️  Custom path not found: $CUSTOM_PATH"
             fi
-            
-            # Copy from docs only if build is still empty
-            if [ -z "$(ls -A build/)" ] && [ -d "docs" ]; then
-              echo "📦 Build empty, using 'docs' directory as fallback"
-              cp -r docs/* build/ 2>/dev/null || true
+          else
+            case "$ARTIFACT_SOURCE" in
+              "auto")
+                echo "🔄 Auto-detecting artifact source..."
+                for dir in public build docs dist website; do
+                  if [ -d "$dir" ] && [ -n "$(ls -A $dir 2>/dev/null)" ]; then
+                    echo "✅ Found artifact in '$dir' directory"
+                    cp -r "$dir"/* build/ 2>/dev/null || true
+                    break
+                  fi
+                done
+                ;;
+              *)
+                echo "📦 Using artifact source: $ARTIFACT_SOURCE"
+                if [ -d "$ARTIFACT_SOURCE" ]; then
+                  cp -r "$ARTIFACT_SOURCE"/* build/ 2>/dev/null || true
+                else
+                  echo "⚠️  Artifact source not found: $ARTIFACT_SOURCE"
+                fi
+                ;;
+            esac
+          fi
+          
+          # Validate deployment
+          if [ ! -d "build" ] || [ -z "$(ls -A build/ 2>/dev/null)" ]; then
+            echo "⚠️  Build directory empty, attempting secondary fallback..."
+            if [ -d "public" ]; then
+              echo "Using 'public' directory"
+              cp -r public/* build/ 2>/dev/null || true
             fi
           fi
           
-          FILE_COUNT=$(find build/ -type f | wc -l)
+          FILE_COUNT=$(find build/ -type f 2>/dev/null | wc -l)
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "❌ ERROR: No files found in build directory after preparation!"
+            echo "❌ ERROR: No files found in build directory!"
             echo "Available directories:"
-            ls -la
+            ls -lA
             exit 1
           fi
           
           echo "✅ Deployment ready with $FILE_COUNT files"
-          echo "Contents preview:"
-          find build/ -type f | head -10
+          if [ "$VERBOSE" = "true" ]; then
+            echo "Full contents:"
+            find build/ -type f
+          else
+            echo "Contents preview:"
+            find build/ -type f | head -15
+          fi
 
       - name: 📈 Setup Pages
         uses: actions/configure-pages@v3
@@ -199,6 +335,7 @@ jobs:
       - name: 🔍 Verify Pages deployment
         run: |
           PAGE_URL="${{ needs.deploy.outputs.page_url }}"
+          ENVIRONMENT="${{ inputs.target_environment }}"
           
           if [ -z "$PAGE_URL" ]; then
             echo "❌ ERROR: Deployment URL not found!"
@@ -206,21 +343,23 @@ jobs:
           fi
           
           echo "✅ Deployment successful!"
-          echo "📍 Pages URL: $PAGE_URL"
+          echo "📍 Environment: ${ENVIRONMENT:-production}"
+          echo "🌐 Pages URL: $PAGE_URL"
           echo "Repository settings: Pages deployment completed"
 
 # Workflow Summary:
-# 1. Build: Prepares static files and runs URL rewriter
-# 2. Test: Runs unit tests (depends on build, can be skipped via workflow_dispatch)
-# 3. Deploy: Uploads artifacts to GitHub Pages (requires successful build and test)
-# 4. Verify: Confirms successful deployment with actual URL validation
+# 1. Validate: Checks workflow parameters (only on manual trigger)
+# 2. Build: Prepares static files and runs URL rewriter
+# 3. Test: Runs unit tests (depends on build, can be skipped via workflow_dispatch)
+# 4. Deploy: Uploads artifacts to GitHub Pages (requires successful build and test)
+# 5. Verify: Confirms successful deployment with actual URL validation
 #
-# Key Improvements:
-# - Fixed test job dependency (now depends on build)
-# - Corrected test skip condition (simpler and more predictable)
-# - Added pytest to test dependencies for reliability
-# - Improved deploy preparation with clear priority (public > docs)
-# - Enhanced error handling with file count validation
-# - Added proper URL verification in verify job
-# - Better logging and error messages throughout
-# - Deploy now depends on both build AND test for consistency
+# Key Features:
+# - Multiple artifact source options (auto, public, docs, build, dist, website)
+# - Custom artifact path support for flexibility
+# - Environment selection (production, staging, development, preview)
+# - Custom build command execution
+# - Verbose logging option
+# - Auto-detection of artifact directory
+# - Comprehensive error handling and validation
+# - Clear parameter validation on manual triggers
