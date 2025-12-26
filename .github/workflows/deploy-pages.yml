@@ -89,7 +89,7 @@ jobs:
       target_repo: ${{ steps.resolve.outputs.target_repo }}
       artifact_id_resolved: ${{ steps.resolve.outputs.artifact_id }}
     steps:
-      - name: 🔍 Security Check: Prevent same repo deployment
+      - name: 🔒 Security Check: Prevent same repo deployment
         id: safety
         run: |
           TARGET_REPO="${{ inputs.target_repository }}"
