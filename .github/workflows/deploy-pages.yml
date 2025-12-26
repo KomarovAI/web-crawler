@@ -411,8 +411,10 @@ jobs:
             find build/ -type f | head -15
           fi
 
-      - name: Setup Pages
+      - name: Setup Pages (with enablement)
         uses: actions/configure-pages@v3
+        with:
+          enablement: true
 
       - name: Upload artifacts
         uses: actions/upload-pages-artifact@v3
