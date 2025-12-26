@@ -73,7 +73,6 @@ jobs:
           TARGET_REPO: ${{ github.event.inputs.target_repo }}
           SOURCE_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # Очистить и скопировать контент
           echo "🔄 Replacing repository content..."
@@ -100,7 +99,6 @@ jobs:
           cp -r ../site_content/* .
           
           echo "source_repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
-          echo "source_url=$SOURCE_URL" >> $GITHUB_OUTPUT
           
           echo "✅ Repository ready for commit"
 
@@ -119,7 +117,7 @@ jobs:
         run: |
           # Проверить изменения
           if git diff --quiet; then
-            echo "⚠️  Нет изменений для коммита"
+            echo "⚠️ Нет изменений для коммита"
             echo "status=no_changes" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -141,32 +139,30 @@ Branch: ${TARGET_BRANCH}"
           COMMIT_SHA=$(git rev-parse HEAD)
           echo "status=success" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
-          echo "commit_url=$(git config --get remote.origin.url | sed 's/.git$/\/commit\/'/)$COMMIT_SHA" >> $GITHUB_OUTPUT
           
           echo "✅ Pushed to ${{ github.event.inputs.target_repo }}"
 
       - name: Summary
         if: always()
         run: |
-          echo "═══════════════════════════════════════════════════════"
+          echo "═════════════════════════════════════════════════════════════"
           echo "📊 DEPLOYMENT SUMMARY"
-          echo "═══════════════════════════════════════════════════════"
+          echo "═════════════════════════════════════════════════════════════"
           echo "Source Artifact ID: ${{ github.event.inputs.artifact_id }}"
           echo "Target Repository: ${{ github.event.inputs.target_repo }}"
           echo "Target Branch: ${{ github.event.inputs.target_branch }}"
-          echo "───────────────────────────────────────────────────────"
+          echo "─────────────────────────────────────────────────────────────"
           echo "Files Deployed: ${{ steps.verify.outputs.file_count }}"
           echo "Archive Size: ${{ steps.verify.outputs.dir_size }}"
-          echo "───────────────────────────────────────────────────────"
+          echo "─────────────────────────────────────────────────────────────"
           
           if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
             echo "✅ Status: DEPLOYED SUCCESSFULLY"
             echo "Commit SHA: ${{ steps.commit.outputs.commit_sha }}"
-            echo "Commit URL: ${{ steps.commit.outputs.commit_url }}"
           elif [ "${{ steps.commit.outputs.status }}" = "no_changes" ]; then
-            echo "⚠️  Status: NO CHANGES TO DEPLOY"
+            echo "⚠️ Status: NO CHANGES TO DEPLOY"
           else
             echo "❌ Status: FAILED"
           fi
           
-          echo "═══════════════════════════════════════════════════════"
+          echo "═════════════════════════════════════════════════════════════"
