@@ -411,11 +411,10 @@ jobs:
             find build/ -type f | head -15
           fi
 
-      - name: Setup Pages with Personal Token
+      - name: Setup Pages
         uses: actions/configure-pages@v3
-        with:
-          token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
-          enablement: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
         uses: actions/upload-pages-artifact@v3
@@ -425,9 +424,8 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-        with:
-          artifact-name: github-pages
-          token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN || secrets.GITHUB_TOKEN }}
 
   verify:
     name: Verify Deployment
