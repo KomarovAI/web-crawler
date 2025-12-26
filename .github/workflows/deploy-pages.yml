@@ -245,7 +245,7 @@ jobs:
           find build/ -type f | wc -l
 
       - name: Cache build artifacts
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: build/
           key: ${{ env.BUILD_CACHE_KEY }}
@@ -297,7 +297,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore build artifacts
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: build/
           key: ${{ env.BUILD_CACHE_KEY }}
@@ -376,13 +376,13 @@ jobs:
         uses: actions/configure-pages@v3
 
       - name: Upload artifacts
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v3
         with:
           path: 'build/'
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
         with:
           artifact-name: github-pages
 
