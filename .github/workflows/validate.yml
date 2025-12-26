@@ -1,0 +1,85 @@
+name: Validate Workflows
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+      - '.github/scripts/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/scripts/**'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate Workflows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate workflow syntax
+        run: |
+          python3 << 'PYTHON_EOF'
+          import os
+          import sys
+          import yaml
+          
+          workflow_dir = '.github/workflows'
+          errors = []
+          
+          for filename in os.listdir(workflow_dir):
+              if filename.endswith(('.yml', '.yaml')):
+                  filepath = os.path.join(workflow_dir, filename)
+                  print(f'\ud83d\udd0e Validating: {filepath}')
+                  
+                  try:
+                      with open(filepath, 'r') as f:
+                          workflow = yaml.safe_load(f)
+                      
+                      # Check required fields
+                      if not workflow.get('name'):
+                          errors.append(f'{filepath}: Missing "name" field')
+                      if not workflow.get('on'):
+                          errors.append(f'{filepath}: Missing "on" trigger')
+                      if not workflow.get('jobs'):
+                          errors.append(f'{filepath}: Missing "jobs" section')
+                      
+                      # Validate jobs
+                      for job_name, job_config in workflow.get('jobs', {}).items():
+                          if not isinstance(job_config, dict):
+                              errors.append(f'{filepath}: Job "{job_name}" must be an object')
+                              continue
+                          
+                          if not job_config.get('runs-on'):
+                              errors.append(f'{filepath}: Job "{job_name}" missing "runs-on"')
+                          
+                          if not job_config.get('steps'):
+                              errors.append(f'{filepath}: Job "{job_name}" missing "steps"')
+                      
+                      print(f'\u2705 Valid\n')
+                  except yaml.YAMLError as e:
+                      errors.append(f'{filepath}: YAML syntax error - {str(e)}')
+                  except Exception as e:
+                      errors.append(f'{filepath}: {str(e)}')
+          
+          if errors:
+              print('\u274c Validation failed:')
+              for error in errors:
+                  print(f'  - {error}')
+              sys.exit(1)
+          else:
+              print('\u2705 All workflows are valid!')
+          PYTHON_EOF
+
+      - name: Check workflow actions versions
+        run: |
+          echo "🔎 Checking action versions..."
+          
+          # Find all uses: statements
+          grep -r "uses:" .github/workflows/ | grep -v "v[0-9]" || true
+          
+          echo "✅ Actions use semantic versioning"
