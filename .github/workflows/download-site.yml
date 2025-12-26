@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
           ref: main
@@ -183,14 +183,19 @@ jobs:
       - name: Send callback to N8N
         if: always() && github.event.inputs.resumeUrl
         run: |
+          FILES=${FILES:-0}
+          SIZE="${{ steps.verify.outputs.dir_size }}"
+          FILES="${{ steps.verify.outputs.file_count || 0 }}"
+          TIME="${{ steps.download.outputs.elapsed_time || 0 }}"
+          
           curl -s -X POST "${{ github.event.inputs.resumeUrl }}" \
             -H "Content-Type: application/json" \
             -d "{
               \"status\": \"${{ job.status }}\",
-              \"files\": ${{ steps.verify.outputs.file_count || 0 }},
-              \"size\": \"${{ steps.verify.outputs.dir_size }}\",
+              \"files\": ${FILES},
+              \"size\": \"${SIZE}\",
               \"url\": \"${{ steps.validate.outputs.url }}\",
               \"depth\": ${{ steps.validate.outputs.depth_level }},
-              \"time\": ${{ steps.download.outputs.elapsed_time || 0 }},
+              \"time\": ${TIME},
               \"run_id\": \"${{ github.run_id }}\"
             }" || true
