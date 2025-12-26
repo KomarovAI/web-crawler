@@ -34,6 +34,8 @@ env:
   PYTHON_VERSION: '3.11'
   BUILD_CACHE_KEY: build-cache-${{ github.run_id }}
   CURRENT_REPO: ${{ github.repository }}
+  ARTIFACT_RETENTION_DAYS: 30
+  TARGET_REPO: ${{ github.event.inputs.target_repository }}
 
 jobs:
   build:
@@ -74,6 +76,7 @@ jobs:
               <div class="info">
                   <p>Deployment successful!</p>
                   <p>Repository: ${{ env.CURRENT_REPO }}</p>
+                  <p>Target: ${{ env.TARGET_REPO }}</p>
                   <p>Timestamp: $(date)</p>
               </div>
           </body>
@@ -120,28 +123,29 @@ jobs:
         run: |
           echo "Preparing deployment..."
           echo "Artifact source: $ARTIFACT_SOURCE"
+          echo "Target repository: ${{ env.TARGET_REPO }}"
           
           if [ "$ARTIFACT_SOURCE" = "auto" ]; then
-            echo "Auto-detecting..."
+            echo "Auto-detecting artifact directory..."
             for dir in public build docs dist website; do
               if [ -d "$dir" ] && [ -n "$(ls -A $dir 2>/dev/null)" ]; then
-                echo "Found in: $dir"
+                echo "✅ Found artifact in: $dir"
                 cp -r "$dir"/* build/ 2>/dev/null || true
                 break
               fi
             done
           elif [ -d "$ARTIFACT_SOURCE" ]; then
-            echo "Using: $ARTIFACT_SOURCE"
+            echo "✅ Using specified artifact source: $ARTIFACT_SOURCE"
             cp -r "$ARTIFACT_SOURCE"/* build/ 2>/dev/null || true
           fi
           
           if [ -z "$(ls -A build/ 2>/dev/null)" ]; then
-            echo "Creating fallback index.html"
+            echo "⚠️ No artifacts found, creating fallback index.html"
             mkdir -p build/
             echo "<h1>Deployment successful</h1>" > build/index.html
           fi
           
-          echo "Files ready:"
+          echo "📦 Files ready for deployment:"
           find build/ -type f | head -20
 
       - name: Enable GitHub Pages via API
@@ -149,35 +153,43 @@ jobs:
           TARGET_REPO: ${{ inputs.target_repository }}
           TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
         run: |
-          echo "Enabling Pages for: $TARGET_REPO"
-          curl -X POST \
+          if [ -z "$TOKEN" ]; then
+            echo "⚠️ EXTERNAL_REPO_PAT not configured, skipping API enablement"
+            exit 0
+          fi
+          
+          echo "🔧 Enabling GitHub Pages for: $TARGET_REPO"
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/$TARGET_REPO/pages" \
-            -d '{"build_type":"workflow","source":{"branch":"gh-pages","path":"/"}}' \
-            -w "\nStatus: %{http_code}\n" || true
+            -d '{"build_type":"workflow","source":{"branch":"gh-pages","path":"/"}}')
+          
+          STATUS_CODE=$(echo "$RESPONSE" | tail -n1)
+          echo "API Response Status: $STATUS_CODE"
+          
+          if [ "$STATUS_CODE" = "201" ] || [ "$STATUS_CODE" = "204" ]; then
+            echo "✅ GitHub Pages enabled successfully"
+          else
+            echo "ℹ️ Pages configuration response: $STATUS_CODE (may already exist)"
+          fi
 
-      - name: Setup Pages with External PAT
-        uses: actions/configure-pages@v3
-        with:
-          enablement: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
 
       - name: Upload artifacts
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'build/'
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-        env:
-          GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
 
       - name: Verify deployment
         run: |
-          TARGET_REPO="${{ inputs.target_repository }}"
           echo "✅ Deployment completed!"
-          echo "Repository: $TARGET_REPO"
-          echo "Check: https://github.com/$TARGET_REPO/settings/pages"
+          echo "🔗 Repository: ${{ env.TARGET_REPO }}"
+          echo "📄 Check Pages settings: https://github.com/${{ env.TARGET_REPO }}/settings/pages"
+          echo "🌐 Page URL: ${{ steps.deployment.outputs.page_url }}"
