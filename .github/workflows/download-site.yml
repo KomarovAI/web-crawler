@@ -201,7 +201,7 @@ jobs:
             echo "**Status: ❌ FAILED** (no archive created)" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Artifact:** `${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}`" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact:** \`${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Send callback to N8N
         if: always() && github.event.inputs.resumeUrl
