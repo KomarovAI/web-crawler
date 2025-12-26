@@ -1,4 +1,4 @@
-name: Deploy Static Site to GitHub Pages
+name: Deploy to GitHub Pages
 
 on:
   workflow_dispatch:
@@ -20,6 +20,16 @@ on:
         required: false
         default: '30'
         type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'public/**'
+      - 'docs/**'
+      - 'build/**'
+      - 'dist/**'
+      - 'website/**'
+      - '.github/workflows/deploy-pages.yml'
 
 permissions:
   contents: read
@@ -27,12 +37,11 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages-deploy"
+  group: "pages"
   cancel-in-progress: true
 
 env:
   ARTIFACT_PATH: _site
-  ARTIFACT_RETENTION_DAYS: ${{ inputs.retention_days || 30 }}
 
 jobs:
   prepare:
@@ -42,8 +51,6 @@ jobs:
       contents: read
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
-      artifact_url: ${{ steps.upload.outputs.artifact-url }}
-      artifact_size: ${{ steps.prepare.outputs.artifact_size }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,7 +63,13 @@ jobs:
           set -e
           mkdir -p "${{ env.ARTIFACT_PATH }}"
           
-          SOURCE="${{ inputs.artifact_source }}"
+          # Determine source directory
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SOURCE="auto"
+          else
+            SOURCE="${{ inputs.artifact_source }}"
+          fi
+          
           FOUND=0
           
           if [ "$SOURCE" = "auto" ]; then
@@ -76,7 +89,7 @@ jobs:
           fi
           
           if [ $FOUND -eq 0 ]; then
-            echo "⚠️  No artifacts found. Creating fallback content..."
+            echo "⚠️ No artifacts found. Creating fallback content..."
             cat > "${{ env.ARTIFACT_PATH }}/index.html" << 'FALLBACK_EOF'
 <!DOCTYPE html>
 <html lang="en">
@@ -115,35 +128,20 @@ jobs:
     <div class="meta">
       <p>Repository: ${{ github.repository }}</p>
       <p>Run: ${{ github.run_number }}</p>
-      <p>Time: $(date -u)</p>
+      <p>Branch: ${{ github.ref_name }}</p>
     </div>
   </div>
 </body>
 </html>
 FALLBACK_EOF
           fi
-          
-          FILE_COUNT=$(find "${{ env.ARTIFACT_PATH }}" -type f | wc -l)
-          TOTAL_SIZE=$(du -sh "${{ env.ARTIFACT_PATH }}" | cut -f1)
-          
-          echo "📦 Artifact Summary:"
-          echo "  Files: $FILE_COUNT"
-          echo "  Size: $TOTAL_SIZE"
-          echo "artifact_size=$TOTAL_SIZE" >> "$GITHUB_OUTPUT"
 
       - name: Upload Pages artifact
         id: upload
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ env.ARTIFACT_PATH }}
-          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
-
-      - name: Log artifact details
-        run: |
-          echo "📌 Artifact Information:"
-          echo "  ID: ${{ steps.upload.outputs.artifact-id }}"
-          echo "  URL: ${{ steps.upload.outputs.artifact-url }}"
-          echo "  Size: ${{ steps.prepare.outputs.artifact_size }}"
+          retention-days: ${{ inputs.retention_days || 30 }}
 
   deploy:
     name: Deploy to GitHub Pages
@@ -156,9 +154,6 @@ FALLBACK_EOF
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    outputs:
-      page_url: ${{ steps.deployment.outputs.page_url }}
-      artifact_id: ${{ needs.prepare.outputs.artifact_id }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
@@ -166,16 +161,8 @@ FALLBACK_EOF
         with:
           artifact_id: ${{ needs.prepare.outputs.artifact_id }}
 
-      - name: 🎉 Deployment Summary
+      - name: ✅ Deployment Complete
         run: |
-          cat << 'SUMMARY_EOF'
-          ╔════════════════════════════════════════════════════════════════╗
-          ║                   ✅ DEPLOYMENT COMPLETE                        ║
-          ╠════════════════════════════════════════════════════════════════╣
-          ║ Repository:   ${{ github.repository }}
-          ║ Run:          ${{ github.run_number }}
-          ║ Artifact ID:  ${{ needs.prepare.outputs.artifact_id }}
-          ║ Page URL:     ${{ steps.deployment.outputs.page_url }}
-          ║ Status:       SUCCESS
-          ╚════════════════════════════════════════════════════════════════╝
-          SUMMARY_EOF
+          echo "🎉 Deployment successful!"
+          echo "📌 Artifact ID: ${{ needs.prepare.outputs.artifact_id }}"
+          echo "🌐 Page URL: ${{ steps.deployment.outputs.page_url }}"
