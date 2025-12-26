@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       target_repository:
-        description: 'Target repository for deployment (owner/repo)'
+        description: 'Target repository for deployment (owner/repo) - MUST BE DIFFERENT FROM CURRENT REPO!'
         required: true
-        default: 'KomarovAI/web-crawler'
+        default: 'example/pages-repo'
         type: string
       artifact_id:
         description: 'Artifact ID to deploy (leave empty for current run)'
@@ -76,11 +76,12 @@ concurrency:
 env:
   PYTHON_VERSION: '3.11'
   BUILD_CACHE_KEY: build-cache-${{ github.run_id }}
+  CURRENT_REPO: ${{ github.repository }}
 
 jobs:
   # Job 0: Validate and log parameters
   validate:
-    name: Validate Parameters
+    name: Validate Parameters & Safety Checks
     runs-on: ubuntu-latest
     outputs:
       artifact_path: ${{ steps.resolve.outputs.artifact_path }}
@@ -88,6 +89,46 @@ jobs:
       target_repo: ${{ steps.resolve.outputs.target_repo }}
       artifact_id_resolved: ${{ steps.resolve.outputs.artifact_id }}
     steps:
+      - name: 🔍 Security Check: Prevent same repo deployment
+        id: safety
+        run: |
+          TARGET_REPO="${{ inputs.target_repository }}"
+          CURRENT_REPO="${{ env.CURRENT_REPO }}"
+          
+          echo "🔒 SAFETY VALIDATION"
+          echo "=================="
+          echo "Current Repository: $CURRENT_REPO"
+          echo "Target Repository:  $TARGET_REPO"
+          echo ""
+          
+          if [ "$TARGET_REPO" = "$CURRENT_REPO" ]; then
+            echo "❌ ❌ DEPLOYMENT BLOCKED! ❌"
+            echo ""
+            echo "⚠️  CRITICAL SECURITY ERROR:"
+            echo "You are trying to deploy to the SAME repository!"
+            echo ""
+            echo "This workflow CLEARS the target repository before deployment."
+            echo "If you deploy to THIS repo, ALL FILES WILL BE DELETED!"
+            echo ""
+            echo "Current Repo:  $CURRENT_REPO"
+            echo "Target Repo:   $TARGET_REPO"
+            echo ""
+            echo "✅ SOLUTION:"
+            echo "   Deploy to a DIFFERENT repository (pages-only repo)"
+            echo ""
+            echo "❌ BANNED REPOSITORIES:"
+            echo "   - $CURRENT_REPO"
+            echo ""
+            echo "✅ EXAMPLES OF ALLOWED TARGETS:"
+            echo "   - KomarovAI/KomarovAI.github.io"
+            echo "   - KomarovAI/web-pages"
+            echo "   - username/pages-deployment"
+            exit 1
+          fi
+          
+          echo "✅ Safety check PASSED - Different repositories"
+          echo ""
+
       - name: 🔍 Validate workflow inputs
         id: resolve
         run: |
@@ -106,7 +147,7 @@ jobs:
           TARGET_REPO="${{ inputs.target_repository }}"
           if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
             echo "❌ ERROR: Invalid repository format: $TARGET_REPO"
-            echo "Use format: owner/repo (e.g., KomarovAI/web-crawler)"
+            echo "Use format: owner/repo (e.g., KomarovAI/web-pages)"
             exit 1
           fi
           echo "✅ Target repository validated: $TARGET_REPO"
@@ -380,8 +421,13 @@ jobs:
           echo ""
           echo "Repository settings: Pages deployment completed"
 
+# ⚠️  SECURITY NOTICE:
+# This workflow WILL DELETE all files in the target repository before deployment!
+# DO NOT deploy to the source repository (web-crawler)!
+# Only deploy to a dedicated GitHub Pages repository.
+#
 # Workflow Summary:
-# 1. Validate: Checks workflow parameters and repository format
+# 1. Validate: Checks workflow parameters and PREVENTS same-repo deployment
 # 2. Build: Prepares static files and runs URL rewriter
 # 3. Test: Runs unit tests (can be skipped via workflow_dispatch)
 # 4. Deploy: Uploads artifacts to GitHub Pages
@@ -389,7 +435,8 @@ jobs:
 #
 # Key Features:
 # - ONLY MANUAL TRIGGER via workflow_dispatch
-# - Target repository selection (owner/repo format)
+# - SAFETY CHECK: Prevents deployment to source repository
+# - Target repository selection (owner/repo format, MUST be different repo)
 # - Artifact ID tracking and logging
 # - Multiple artifact source options (auto, public, docs, build, dist, website)
 # - Custom artifact path support for flexibility
