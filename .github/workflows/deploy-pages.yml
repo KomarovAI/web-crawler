@@ -411,10 +411,10 @@ jobs:
             find build/ -type f | head -15
           fi
 
-      - name: Setup Pages
+      - name: Setup Pages with External PAT
         uses: actions/configure-pages@v3
         env:
-          GITHUB_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
 
       - name: Upload artifacts
         uses: actions/upload-pages-artifact@v3
@@ -425,7 +425,7 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
         env:
-          GITHUB_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
 
   verify:
     name: Verify Deployment
