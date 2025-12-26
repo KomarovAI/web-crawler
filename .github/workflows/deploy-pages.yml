@@ -1,10 +1,20 @@
 # GitHub Pages Deployment Workflow (Improved)
-# Deploys static content to GitHub Pages
+# Deploys static content to GitHub Pages with flexible artifact and repo selection
 name: Deploy to GitHub Pages (Optimized)
 
 on:
   workflow_dispatch:
     inputs:
+      target_repository:
+        description: 'Target repository for deployment (owner/repo)'
+        required: true
+        default: 'KomarovAI/web-crawler'
+        type: string
+      artifact_id:
+        description: 'Artifact ID to deploy (leave empty for current run)'
+        required: false
+        type: string
+        default: ''
       artifact_source:
         description: 'Choose artifact source to deploy'
         required: true
@@ -75,11 +85,15 @@ jobs:
     outputs:
       artifact_path: ${{ steps.resolve.outputs.artifact_path }}
       environment: ${{ steps.resolve.outputs.environment }}
+      target_repo: ${{ steps.resolve.outputs.target_repo }}
+      artifact_id_resolved: ${{ steps.resolve.outputs.artifact_id }}
     steps:
       - name: 🔍 Validate workflow inputs
         id: resolve
         run: |
           echo "📋 Workflow Parameters:"
+          echo "  Target Repository: ${{ inputs.target_repository }}"
+          echo "  Artifact ID: ${{ inputs.artifact_id }}"
           echo "  Artifact Source: ${{ inputs.artifact_source }}"
           echo "  Target Environment: ${{ inputs.target_environment }}"
           echo "  Custom Path: ${{ inputs.custom_artifact_path }}"
@@ -87,6 +101,24 @@ jobs:
           echo "  Skip Tests: ${{ inputs.skip_tests }}"
           echo "  Verbose Logging: ${{ inputs.verbose_logging }}"
           echo ""
+          
+          # Validate and parse target repository
+          TARGET_REPO="${{ inputs.target_repository }}"
+          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
+            echo "❌ ERROR: Invalid repository format: $TARGET_REPO"
+            echo "Use format: owner/repo (e.g., KomarovAI/web-crawler)"
+            exit 1
+          fi
+          echo "✅ Target repository validated: $TARGET_REPO"
+          
+          # Handle artifact ID
+          ARTIFACT_ID="${{ inputs.artifact_id }}"
+          if [ -z "$ARTIFACT_ID" ]; then
+            ARTIFACT_ID="current-run"
+            echo "📦 Artifact ID: Using current workflow run"
+          else
+            echo "📦 Artifact ID: $ARTIFACT_ID"
+          fi
           
           # Resolve artifact path
           if [ -n "${{ inputs.custom_artifact_path }}" ]; then
@@ -111,6 +143,8 @@ jobs:
           
           echo "artifact_path=$ARTIFACT_PATH" >> $GITHUB_OUTPUT
           echo "environment=${{ inputs.target_environment }}" >> $GITHUB_OUTPUT
+          echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
+          echo "artifact_id=$ARTIFACT_ID" >> $GITHUB_OUTPUT
           
           # Validate environment
           case "${{ inputs.target_environment }}" in
@@ -122,6 +156,13 @@ jobs:
               exit 1
               ;;
           esac
+          
+          echo ""
+          echo "🚀 Deployment configuration:"
+          echo "   Repository: $TARGET_REPO"
+          echo "   Environment: ${{ inputs.target_environment }}"
+          echo "   Artifact: $ARTIFACT_ID"
+          echo "   Source: $ARTIFACT_PATH"
 
   # Job 1: Build and prepare static content
   build:
@@ -209,7 +250,7 @@ jobs:
   # Job 3: Deploy to GitHub Pages
   deploy:
     name: Deploy to GitHub Pages
-    needs: [build, test]
+    needs: [build, test, validate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -235,6 +276,13 @@ jobs:
           ARTIFACT_SOURCE="${{ inputs.artifact_source }}"
           CUSTOM_PATH="${{ inputs.custom_artifact_path }}"
           VERBOSE="${{ inputs.verbose_logging }}"
+          TARGET_REPO="${{ needs.validate.outputs.target_repo }}"
+          ARTIFACT_ID="${{ needs.validate.outputs.artifact_id_resolved }}"
+          
+          echo "📦 Deployment Info:"
+          echo "   Target Repo: $TARGET_REPO"
+          echo "   Artifact ID: $ARTIFACT_ID"
+          echo ""
           
           if [ -n "$CUSTOM_PATH" ]; then
             echo "📦 Using custom artifact path: $CUSTOM_PATH"
@@ -309,13 +357,15 @@ jobs:
   # Job 4: Verify deployment
   verify:
     name: Verify Deployment
-    needs: [deploy]
+    needs: [deploy, validate]
     runs-on: ubuntu-latest
     steps:
       - name: 🔍 Verify Pages deployment
         run: |
           PAGE_URL="${{ needs.deploy.outputs.page_url }}"
           ENVIRONMENT="${{ inputs.target_environment }}"
+          TARGET_REPO="${{ needs.validate.outputs.target_repo }}"
+          ARTIFACT_ID="${{ needs.validate.outputs.artifact_id_resolved }}"
           
           if [ -z "$PAGE_URL" ]; then
             echo "❌ ERROR: Deployment URL not found!"
@@ -323,12 +373,15 @@ jobs:
           fi
           
           echo "✅ Deployment successful!"
-          echo "📍 Environment: ${ENVIRONMENT:-production}"
+          echo "📍 Target Repository: $TARGET_REPO"
+          echo "📦 Artifact ID: $ARTIFACT_ID"
+          echo "📋 Environment: ${ENVIRONMENT:-production}"
           echo "🌐 Pages URL: $PAGE_URL"
+          echo ""
           echo "Repository settings: Pages deployment completed"
 
 # Workflow Summary:
-# 1. Validate: Checks workflow parameters
+# 1. Validate: Checks workflow parameters and repository format
 # 2. Build: Prepares static files and runs URL rewriter
 # 3. Test: Runs unit tests (can be skipped via workflow_dispatch)
 # 4. Deploy: Uploads artifacts to GitHub Pages
@@ -336,7 +389,8 @@ jobs:
 #
 # Key Features:
 # - ONLY MANUAL TRIGGER via workflow_dispatch
-# - NO automatic push/PR triggers
+# - Target repository selection (owner/repo format)
+# - Artifact ID tracking and logging
 # - Multiple artifact source options (auto, public, docs, build, dist, website)
 # - Custom artifact path support for flexibility
 # - Environment selection (production, staging, development, preview)
@@ -344,4 +398,4 @@ jobs:
 # - Verbose logging option
 # - Auto-detection of artifact directory
 # - Comprehensive error handling and validation
-# - Clear parameter validation on startup
+# - Full parameter validation on startup
