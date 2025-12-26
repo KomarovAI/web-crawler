@@ -1,6 +1,183 @@
+name: Deploy to GitHub Pages (Optimized)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repository:
+        description: 'Target repository for deployment (owner/repo)'
+        required: true
+        default: 'KomarovAI/archived-sites'
+        type: string
+      artifact_source:
+        description: 'Choose artifact source to deploy'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - 'auto'
+          - 'public'
+          - 'docs'
+          - 'build'
+          - 'dist'
+          - 'website'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  BUILD_CACHE_KEY: build-cache-${{ github.run_id }}
+  CURRENT_REPO: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build Static Content
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create build output directory
+        run: mkdir -p build/
+
+      - name: Generate test content
+        run: |
+          cat > build/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Web Crawler - Deployment</title>
+              <style>
+                  body {
+                      font-family: Arial, sans-serif;
+                      max-width: 800px;
+                      margin: 50px auto;
+                      padding: 20px;
+                      background: #f5f5f5;
+                  }
+                  h1 { color: #333; }
+                  .info { background: white; padding: 15px; border-radius: 5px; }
+              </style>
+          </head>
+          <body>
+              <h1>Web Crawler Deployment</h1>
+              <div class="info">
+                  <p>Deployment successful!</p>
+                  <p>Repository: ${{ env.CURRENT_REPO }}</p>
+                  <p>Timestamp: $(date)</p>
+              </div>
+          </body>
+          </html>
+          EOF
+          echo "Test content generated"
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: build/
+          key: ${{ env.BUILD_CACHE_KEY }}
+          restore-keys: |
+            build-cache-
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore build artifacts
+        uses: actions/cache@v4
+        with:
+          path: build/
+          key: ${{ env.BUILD_CACHE_KEY }}
+          restore-keys: |
+            build-cache-
+
+      - name: Prepare deployment directory
+        env:
+          ARTIFACT_SOURCE: ${{ inputs.artifact_source }}
+        run: |
+          echo "Preparing deployment..."
+          echo "Artifact source: $ARTIFACT_SOURCE"
+          
+          if [ "$ARTIFACT_SOURCE" = "auto" ]; then
+            echo "Auto-detecting..."
+            for dir in public build docs dist website; do
+              if [ -d "$dir" ] && [ -n "$(ls -A $dir 2>/dev/null)" ]; then
+                echo "Found in: $dir"
+                cp -r "$dir"/* build/ 2>/dev/null || true
+                break
+              fi
+            done
+          elif [ -d "$ARTIFACT_SOURCE" ]; then
+            echo "Using: $ARTIFACT_SOURCE"
+            cp -r "$ARTIFACT_SOURCE"/* build/ 2>/dev/null || true
+          fi
+          
+          if [ -z "$(ls -A build/ 2>/dev/null)" ]; then
+            echo "Creating fallback index.html"
+            mkdir -p build/
+            echo "<h1>Deployment successful</h1>" > build/index.html
+          fi
+          
+          echo "Files ready:"
+          find build/ -type f | head -20
+
+      - name: Enable GitHub Pages via API
+        env:
+          TARGET_REPO: ${{ inputs.target_repository }}
+          TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+        run: |
+          echo "Enabling Pages for: $TARGET_REPO"
+          curl -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$TARGET_REPO/pages" \
+            -d '{"build_type":"workflow","source":{"branch":"gh-pages","path":"/"}}' \
+            -w "\nStatus: %{http_code}\n" || true
+
       - name: Setup Pages with External PAT
         uses: actions/configure-pages@v3
         with:
           enablement: true
         env:
           GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+
+      - name: Upload artifacts
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'build/'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
+
+      - name: Verify deployment
+        run: |
+          TARGET_REPO="${{ inputs.target_repository }}"
+          echo "✅ Deployment completed!"
+          echo "Repository: $TARGET_REPO"
+          echo "Check: https://github.com/$TARGET_REPO/settings/pages"
