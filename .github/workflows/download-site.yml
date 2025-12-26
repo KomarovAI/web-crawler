@@ -12,9 +12,14 @@ on:
         description: 'Crawl depth: 1=homepage, 2=+children (default), 3=+grandchildren, 4=very deep'
         required: false
         default: '2'
-        type: string
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
       output_dir:
-        description: 'Output directory name (no special chars)'
+        description: 'Output directory name (alphanumeric, dash, underscore only)'
         required: false
         default: 'site_archive'
         type: string
@@ -22,6 +27,10 @@ on:
         description: 'N8N webhook URL for callback (auto-filled by N8N)'
         required: false
         type: string
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   download:
@@ -46,6 +55,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          set -e
           sudo apt-get update -qq
           sudo apt-get install -y wget
           pip install -q requests beautifulsoup4 selenium
@@ -58,13 +68,15 @@ jobs:
           INPUT_DEPTH: ${{ github.event.inputs.depth_level || '2' }}
           INPUT_OUTPUT: ${{ github.event.inputs.output_dir || 'site_archive' }}
         run: |
+          set -e
+
           # Validate URL
           if [[ ! "$INPUT_URL" =~ ^https?:// ]]; then
             echo "❌ URL must start with http:// or https://"
             exit 1
           fi
 
-          # Validate depth_level
+          # Validate depth_level (should already be constrained by choice)
           if ! [[ "$INPUT_DEPTH" =~ ^[0-9]+$ ]] || (( INPUT_DEPTH < 1 )) || (( INPUT_DEPTH > 4 )); then
             echo "❌ depth_level must be 1-4"
             exit 1
@@ -73,12 +85,12 @@ jobs:
           # Get level description
           case $INPUT_DEPTH in
             1) LEVEL_DESC="homepage only" ;;
-            2) LEVEL_DESC="+children" ;;
-            3) LEVEL_DESC="+2 levels" ;;
-            4) LEVEL_DESC="very deep" ;;
+            2) LEVEL_DESC="homepage + children (default)" ;;
+            3) LEVEL_DESC="homepage + 2 levels deep" ;;
+            4) LEVEL_DESC="very deep crawl" ;;
           esac
 
-          # Sanitize directory
+          # Sanitize directory - only alphanumeric, dash, underscore
           SANITIZED_DIR=$(echo "$INPUT_OUTPUT" | tr -cd '[:alnum:]_-')
           SANITIZED_DIR=${SANITIZED_DIR:-site_archive}
 
@@ -89,7 +101,7 @@ jobs:
           
           # Log validation result
           DOMAIN=$(echo "$INPUT_URL" | sed 's|https://||g' | sed 's|http://||g' | cut -d'/' -f1)
-          echo "📋 Input: $DOMAIN | depth=$INPUT_DEPTH"
+          echo "📋 Input validated: $DOMAIN | depth=$INPUT_DEPTH | $LEVEL_DESC"
 
       - name: Download site with wget
         id: download
@@ -98,34 +110,36 @@ jobs:
           OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
           DEPTH: ${{ steps.validate.outputs.depth_level }}
         run: |
+          set -e
           mkdir -p "$OUTPUT_DIR"
           
-          echo "🌐 Starting download..."
+          echo "🌐 Starting download from: $URL"
           START_TIME=$(date +%s)
           
-          wget --recursive --level="$DEPTH" \
+          # Download with wget - optimized flags
+          wget --recursive \
+            --level="$DEPTH" \
             --convert-links \
-            --page-requisites \
             --adjust-extension \
             --no-parent \
             --directory-prefix="$OUTPUT_DIR" \
             --timeout=30 \
             --tries=3 \
-            --user-agent="Mozilla/5.0" \
+            --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
             --reject-regex='\?.*' \
-            "$URL" 2>&1 | grep -E '(^--|saved|Finished)' || true
+            "$URL" 2>&1 | tee wget.log || WGET_EXIT=$?
           
-          WGET_EXIT=$?
+          WGET_EXIT=${WGET_EXIT:-0}
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
           
           echo "wget_status=$WGET_EXIT" >> $GITHUB_OUTPUT
           echo "elapsed_time=$ELAPSED" >> $GITHUB_OUTPUT
           
-          if [[ $WGET_EXIT -eq 0 ]]; then
-            echo "✅ Download completed (${ELAPSED}s)"
+          if [[ $WGET_EXIT -eq 0 || $WGET_EXIT -eq 8 ]]; then
+            echo "✅ Download completed (${ELAPSED}s) - Exit code: $WGET_EXIT"
           else
-            echo "⚠️ Download completed with status $WGET_EXIT (${ELAPSED}s)"
+            echo "⚠️ Download completed with exit code $WGET_EXIT (${ELAPSED}s)"
           fi
 
       - name: Verify archive
@@ -133,19 +147,28 @@ jobs:
         env:
           OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
         run: |
+          set -e
+
           if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
-            echo "❌ Archive is empty"
+            echo "❌ Archive is empty or doesn't exist"
             exit 1
           fi
 
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l)
           DIR_SIZE=$(du -sh "$OUTPUT_DIR" | cut -f1)
           
+          # Safety check
+          if [ "$FILE_COUNT" -lt 1 ]; then
+            echo "❌ No files downloaded"
+            exit 1
+          fi
+          
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
           echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
           
           echo "📦 Archive verified: $FILE_COUNT files | $DIR_SIZE"
+          find "$OUTPUT_DIR" -type f | head -20
 
       - name: Upload artifact
         id: upload
@@ -156,46 +179,52 @@ jobs:
           path: ${{ steps.verify.outputs.upload_path }}
           retention-days: 30
           if-no-files-found: warn
+          compression-level: 0
 
-      - name: Summary
+      - name: Job summary
         if: always()
         run: |
-          echo "═══════════════════════════════════════"
-          echo "📊 WORKFLOW SUMMARY"
-          echo "═══════════════════════════════════════"
-          echo "URL: ${{ steps.validate.outputs.url }}"
-          echo "Depth: ${{ steps.validate.outputs.depth_level }} (${{ steps.validate.outputs.level_description }})"
-          echo "───────────────────────────────────────"
+          echo "## 📊 Download Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- URL: ${{ steps.validate.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Depth: ${{ steps.validate.outputs.depth_level }} (${{ steps.validate.outputs.level_description }})" >> $GITHUB_STEP_SUMMARY
+          echo "- Output: ${{ steps.validate.outputs.output_dir }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ -n "${{ steps.verify.outputs.file_count }}" ]]; then
-            echo "✅ Status: SUCCESS"
-            echo "📁 Files: ${{ steps.verify.outputs.file_count }}"
-            echo "💾 Size: ${{ steps.verify.outputs.dir_size }}"
-            echo "⏱️  Time: ${{ steps.download.outputs.elapsed_time }}s"
+            echo "**Status: ✅ SUCCESS**" >> $GITHUB_STEP_SUMMARY
+            echo "- Files: ${{ steps.verify.outputs.file_count }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Size: ${{ steps.verify.outputs.dir_size }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Time: ${{ steps.download.outputs.elapsed_time }}s" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Status: FAILED (no archive)"
+            echo "**Status: ❌ FAILED** (no archive created)" >> $GITHUB_STEP_SUMMARY
           fi
-          
-          echo "───────────────────────────────────────"
-          echo "Artifact: ${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}"
-          echo "═══════════════════════════════════════"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact:** `${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}`" >> $GITHUB_STEP_SUMMARY
 
       - name: Send callback to N8N
         if: always() && github.event.inputs.resumeUrl
+        continue-on-error: true
         run: |
-          FILES=${FILES:-0}
-          SIZE="${{ steps.verify.outputs.dir_size }}"
           FILES="${{ steps.verify.outputs.file_count || 0 }}"
+          SIZE="${{ steps.verify.outputs.dir_size || 'unknown' }}"
           TIME="${{ steps.download.outputs.elapsed_time || 0 }}"
+          STATUS="success"
+          
+          if [ -z "$FILES" ] || [ "$FILES" = "0" ]; then
+            STATUS="failed"
+          fi
           
           curl -s -X POST "${{ github.event.inputs.resumeUrl }}" \
             -H "Content-Type: application/json" \
             -d "{
-              \"status\": \"${{ job.status }}\",
-              \"files\": ${FILES},
-              \"size\": \"${SIZE}\",
+              \"status\": \"$STATUS\",
+              \"files\": $FILES,
+              \"size\": \"$SIZE\",
               \"url\": \"${{ steps.validate.outputs.url }}\",
               \"depth\": ${{ steps.validate.outputs.depth_level }},
-              \"time\": ${TIME},
-              \"run_id\": \"${{ github.run_id }}\"
-            }" || true
+              \"time\": $TIME,
+              \"run_id\": \"${{ github.run_id }}\",
+              \"artifact_name\": \"${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}\"
+            }" || echo "⚠️ Failed to send callback"
