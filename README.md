@@ -9,7 +9,8 @@
 Workflow использует **5 jobs** с **matrix strategy** для параллельной скачки и автоматической обработки ошибок.
 
 **Artifacts хранятся в GitHub репозитории (Actions → Artifacts) 30 дней.**  
-**Имя artifact генерируется автоматически из URL:** `domain_name-{run_id}.zip`
+**Имя artifact генерируется автоматически из URL:** `domain_name-{run_id}.zip`  
+**robots.txt игнорируется:** `--execute robots=off` (полная скачка без ограничений)
 
 ---
 ## 🏗️ Архитектура
@@ -132,6 +133,65 @@ parallel -j 3 --timeout 90 --retries 2
 
 ---
 
+## 🔥 Игнорирование robots.txt
+
+**Все wget команды используют `--execute robots=off`**
+
+**Почему это важно:**
+- Многие сайты блокируют боты через robots.txt
+- Без этого флага wget скачает только homepage
+- С флагом — полная скачка всего контента
+
+**Пример:**
+```bash
+# ❌ БЕЗ флага (только homepage)
+wget --recursive --level=4 https://example.com
+
+# ✅ С флагом (весь сайт)
+wget --recursive --level=4 --execute robots=off https://example.com
+```
+
+**Применяется:**
+- ✅ Sitemap-based download (parallel)
+- ✅ Recursive download (depth-based)
+- ✅ Retry attempts
+
+---
+
+## 🗺️ Sitemap Detection
+
+**Автоматически проверяет:**
+1. `sitemap.xml`
+2. `sitemap_index.xml` (с underscore!)
+3. `sitemap-index.xml` (с dash)
+
+**Если найден sitemap:**
+- ✅ Извлекает до 1000 URLs
+- ✅ Поддерживает nested sitemaps (sitemap index)
+- ✅ Параллельная скачка по URL
+
+**Если sitemap не найден:**
+- ⚠️ Fallback: recursive wget с depth
+- ⚠️ Медленнее, но надежнее
+
+**Пример с sitemap:**
+```xml
+<!-- https://example.com/sitemap_index.xml -->
+<sitemapindex>
+  <sitemap><loc>https://example.com/post-sitemap.xml</loc></sitemap>
+  <sitemap><loc>https://example.com/page-sitemap.xml</loc></sitemap>
+</sitemapindex>
+```
+
+Workflow автоматически:
+1. Найдет `sitemap_index.xml`
+2. Скачает nested sitemaps (post, page)
+3. Извлечет все URLs
+4. Разобьет на chunks
+5. Скачает параллельно
+
+---
+
 ## 📊 Производительность
 
 ### Время выполнения
@@ -174,6 +234,7 @@ Total: 99%+ success rate
 - Depth: 2
 - Parallel Jobs: 10 runners
 - Sitemap: true
+- Ignore robots.txt: ✅ YES
 
 **Retry Status:**
 - Failed chunks retried: 2
@@ -253,6 +314,8 @@ retry-failed-chunks:
 | Artifact не найден | Workflow failed | Проверь Job Summary для ошибок |
 | Artifact слишком большой | >10GB limit | Уменьши depth_level |
 | Artifact name непонятный | URL с нестандартными символами | Auto-sanitized, только alphanumeric |
+| Скачал только 1-3 файла | robots.txt блокирует | ✅ Исправлено! `--execute robots=off` |
+| Sitemap не найден | Неправильное имя | ✅ Исправлено! Проверяет `sitemap_index.xml` |
 
 ---
 
@@ -268,6 +331,8 @@ retry-failed-chunks:
 8. ✅ **Reduced parallelism on retry** — `-j 3` вместо 5 (бережнее к серверу)
 9. ✅ **Artifacts в GitHub** — централизованное хранение результатов
 10. ✅ **Auto artifact naming** — имя из URL (понятно что внутри)
+11. ✅ **Ignore robots.txt** — полная скачка без ограничений
+12. ✅ **Sitemap with underscore** — поддержка `sitemap_index.xml`
 
 ---
 
@@ -281,6 +346,8 @@ retry-failed-chunks:
 | UI сложность | Средняя | Низкая |
 | Валидация | Нужна (alphanumeric) | Автоматическая |
 | Юзабилити | Можно ошибиться | Невозможно ошибиться |
+| robots.txt | ❌ Соблюдается (мало контента) | ✅ Игнорируется (весь сайт) |
+| Sitemap | ❌ Не находит underscore | ✅ Находит все варианты |
 
 ---
 
@@ -300,6 +367,8 @@ gh workflow run download-site.yml \
 # ✅ Merge successful + retried chunks
 # ✅ Artifact сохраняется в GitHub
 # ✅ Имя artifact: example_com-{run_id}.zip
+# ✅ Игнорирует robots.txt (полная скачка!)
+# ✅ Находит sitemap (даже с underscore)
 
 # Скачать результат:
 # 1. Открой Actions → Workflow run
@@ -308,4 +377,4 @@ gh workflow run download-site.yml \
 
 ---
 
-**Last updated:** 2025-12-28 — v6.0 (auto artifact naming, 3 params)
+**Last updated:** 2025-12-28 — v6.1 (robots.txt ignore, sitemap underscore fix)
