@@ -88,7 +88,10 @@ jobs:
             SITEMAP_URL="${URL}/${SITEMAP}"
             echo "🔍 Checking $SITEMAP_URL"
             
-            if curl -sf --max-time 10 -I "$SITEMAP_URL" | grep -q "200 OK"; then
+            HTTP_CODE=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" "$SITEMAP_URL" || echo "000")
+            echo "  HTTP status: $HTTP_CODE"
+            
+            if [ "$HTTP_CODE" = "200" ]; then
               echo "✅ Found sitemap: $SITEMAP_URL"
               echo "exists=true" >> $GITHUB_OUTPUT
               echo "sitemap_url=$SITEMAP_URL" >> $GITHUB_OUTPUT
@@ -115,6 +118,7 @@ jobs:
           if grep -q "<sitemap>" sitemap.xml; then
             echo "📦 Sitemap index detected, extracting nested sitemaps"
             grep -oP '(?<=<loc>)[^<]+' sitemap.xml | head -10 | while read NESTED_URL; do
+              echo "  Fetching nested: $NESTED_URL"
               wget -q -O - "$NESTED_URL" | grep -oP '(?<=<loc>)[^<]+' >> urls.txt || true
             done
           fi
