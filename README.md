@@ -9,7 +9,6 @@
 - `.github/workflows/download-site.yml` — скачивает сайты через wget, создает artifacts
 - `.gitignore` — стандартный Git-конфиг
 - `README.md` — этот файл
-- `WORKFLOWS_GUIDE.md` — детальная документация workflow
 
 ---
 
@@ -32,12 +31,25 @@
 1. ✅ Валидирует inputs (URL format, depth range, sanitized output_dir)
 2. 🌐 Скачивает сайт через `wget --recursive` с заданной глубиной
 3. ✅ Конвертирует ссылки в относительные (`--convert-links`)
-4. ✅ Добавляет расширения HTML (`--adjust-extension`)
-5. ✅ Применяет timeout/retry (30s timeout, 3 tries)
-6. 📦 Верифицирует архив (file count, size)
-7. ☁️ Загружает как artifact (30 дней retention)
-8. 📊 Создает job summary в Actions UI
-9. 🔔 Отправляет callback в N8N (если `resumeUrl` указан)
+4. ✅ Скачивает page requisites: CSS/JS/images (`-p`)
+5. ✅ Добавляет расширения HTML (`--adjust-extension`)
+6. ✅ Применяет random wait для этичного краулинга (`--random-wait`)
+7. ✅ Проверяет архив (HTML count, minimum size 10KB)
+8. ☁️ Загружает как artifact (30 дней retention)
+9. 📄 Загружает wget.log как отдельный artifact (7 дней)
+10. 📊 Создает job summary в Actions UI
+11. 🔔 Отправляет callback в N8N с 3 retry попытками
+
+**Concurrency:**
+```yaml
+group: download-{url}-{depth}
+cancel-in-progress: true  # Отменяет дубли
+```
+
+**Timeouts:**
+- Job: 60 минут
+- Download step: 45 минут
+- N8N callback: 10 секунд per attempt
 
 **Outputs (artifact):**
 - Имя: `{output_dir}-{run_id}`
@@ -91,13 +103,16 @@ gh workflow run download-site.yml \
 ```bash
 wget --recursive \
   --level="$DEPTH" \
+  --page-requisites \
   --convert-links \
   --adjust-extension \
   --no-parent \
   --directory-prefix="$OUTPUT_DIR" \
   --timeout=30 \
   --tries=3 \
-  --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+  --wait=2 \
+  --random-wait \
+  --user-agent="Mozilla/5.0 (compatible; ArchiveBot/1.0; +https://github.com/KomarovAI/web-crawler)" \
   --reject-regex='\?.*' \
   "$URL"
 ```
@@ -105,11 +120,14 @@ wget --recursive \
 **Почему эти флаги:**
 - `--recursive` — скачивает всю структуру сайта
 - `--level=N` — ограничивает глубину краулинга
+- `--page-requisites` — скачивает CSS/JS/images для каждой страницы (offline-ready)
 - `--convert-links` — переписывает абсолютные ссылки → относительные
 - `--adjust-extension` — добавляет `.html` если нет расширения
 - `--no-parent` — не выходит выше стартовой директории
 - `--timeout=30` — 30 сек на запрос
 - `--tries=3` — 3 попытки при ошибке
+- `--wait=2` — 2 сек базовая задержка
+- `--random-wait` — рандомизация 0.5-1.5x от wait (этичный краулинг)
 - `--reject-regex='\?.*'` — игнорирует query strings (избегает дублей)
 
 ---
@@ -127,7 +145,25 @@ wget --recursive \
 
 ---
 
-## 🔐 N8N Integration
+## 🔍 Verification
+
+**Проверки перед upload:**
+```bash
+# ✅ HTML count ≥ 1
+HTML_COUNT=$(find "$OUTPUT_DIR" -type f \( -name "*.html" -o -name "*.htm" \) | wc -l)
+
+# ✅ Total size ≥ 10KB
+TOTAL_SIZE=$(du -sb "$OUTPUT_DIR" | cut -f1)
+
+# ✅ File count ≥ 1
+FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l)
+```
+
+**Если любая проверка фейлится → workflow fails.**
+
+---
+
+## 🔔 N8N Integration
 
 **Workflow → N8N callback payload:**
 ```json
@@ -143,6 +179,11 @@ wget --recursive \
 }
 ```
 
+**Retry logic:**
+- 3 попытки с 2 секундами между ними
+- Timeout 10 секунд per attempt
+- `continue-on-error: true` — не фейлит workflow при ошибке callback
+
 **Использование в N8N:**
 1. Создайте Webhook node
 2. Скопируйте Production URL
@@ -156,10 +197,28 @@ wget --recursive \
 | Issue | Fix |
 |-------|-----|
 | Artifact empty | Сайт требует JS или блокирует wget |
-| File count = 0 | URL недоступен или неверный |
+| HTML count = 0 | URL недоступен или невалидный |
 | Wget exit code 1 | URL validation failed |
-| Callback failed | N8N webhook недоступен (soft fail) |
+| Callback failed after 3 retries | N8N webhook недоступен (soft fail) |
 | Output dir sanitized | Используйте только `[a-zA-Z0-9_-]` |
+| Job cancelled | Duplicate run detected (concurrency) |
+| Timeout after 45min | Сайт слишком большой, уменьшите depth |
+
+---
+
+## ⚡ Performance
+
+**Оптимизации:**
+- ❌ Удален Python/pip install (экономия ~20-30 сек)
+- ❌ Удален checkout step (не нужен, репо пустой)
+- ✅ Concurrency control (избегает дублей)
+- ✅ timeout-minutes на job и step уровне
+- ✅ compression-level: 0 (быстрый upload)
+
+**Типичное время выполнения:**
+- Маленький сайт (10-50 страниц): 1-3 минуты
+- Средний сайт (100-500 страниц): 5-15 минут
+- Большой сайт (1000+ страниц): 20-45 минут
 
 ---
 
@@ -171,4 +230,4 @@ wget --recursive \
 
 ---
 
-**Last updated:** 2025-12-28 — v1.0 minimal token-first edition
+**Last updated:** 2025-12-28 — v2.0 optimized edition
