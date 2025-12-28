@@ -8,6 +8,8 @@
 
 Workflow использует **5 jobs** с **matrix strategy** для параллельной скачки и автоматической обработки ошибок.
 
+**Artifacts хранятся в GitHub репозитории (Actions → Artifacts) 30 дней.**
+
 ---
 ## 🏗️ Архитектура
 
@@ -19,6 +21,8 @@ Workflow использует **5 jobs** с **matrix strategy** для пара�
                         [Job 4: Retry Failed Chunks]
                                ↓
                         [Job 5: Merge All Results]
+                               ↓
+                        [Upload Artifact to GitHub]
 ```
 
 ### Полный workflow
@@ -51,8 +55,25 @@ Workflow использует **5 jobs** с **matrix strategy** для пара�
 5. **merge-results** (20 мин)
    - Объединяет successful + retried chunks
    - Верифицирует финальный archive
-   - Загружает artifact (30 дней)
-   - Отправляет N8N callback
+   - **Загружает artifact в GitHub (30 дней retention)**
+   - Artifact доступен: Actions → Workflow run → Artifacts
+
+---
+
+## 📦 Artifacts в GitHub
+
+**Где скачать:**
+1. Перейди в **Actions** → выбери свой workflow run
+2. Прокрути вниз до секции **Artifacts**
+3. Скачай ZIP: `site_archive-{run_id}.zip`
+
+**Retention:**
+- **Final artifact**: 30 дней (merged результат)
+- **Temporary artifacts**: 1 день (chunks, statuses)
+
+**Размер limits:**
+- Max 10GB per artifact
+- Max 50GB total per repo
 
 ---
 
@@ -147,6 +168,7 @@ gh workflow run download-site.yml \
 1. Скачивается 10 chunks параллельно
 2. Если 2 chunks фейлятся → автоматический retry
 3. Merge всех successful + retried chunks
+4. **Artifact сохраняется в GitHub (Actions → Artifacts)**
 
 ### Медленный сайт (больше шансов на retry)
 ```bash
@@ -192,7 +214,10 @@ gh workflow run download-site.yml \
 - Size: 156M
 - Merged chunks: 10
 
-**Artifact:** `site_archive-1234567890`
+**Download artifact:**
+- Go to Actions tab → This workflow run → Artifacts section
+- Artifact name: `site_archive-1234567890`
+- Retention: 30 days
 ```
 
 ---
@@ -253,7 +278,9 @@ echo "retry_matrix={\"chunk\":$FAILED_CHUNKS}" >> $GITHUB_OUTPUT
 ```yaml
 retry-failed-chunks:
   needs: detect-failed-chunks
-  if: needs.detect-failed-chunks.outputs.has_failures == 'true'
+  if: |
+    needs.detect-failed-chunks.outputs.has_failures == 'true' &&
+    needs.detect-failed-chunks.outputs.retry_matrix != '{"chunk":[]}'
   strategy:
     matrix: ${{ fromJson(needs.detect-failed-chunks.outputs.retry_matrix) }}
 ```
@@ -298,29 +325,9 @@ wget --timeout=30 --tries=2 --waitretry=2  # Быстрые попытки
 ├─ ✅ retry-failed-chunks (45s)
 │  └─ ✅ chunk_02 ✅  ← retried successfully
 └─ ✅ merge-results (30s)
-   └─ Merged 10 chunks
+   ├─ Merged 10 chunks
+   └─ Uploaded artifact to GitHub
 ```
-
-### N8N callback
-
-```json
-{
-  "status": "success",
-  "files": 1247,
-  "size": "156M",
-  "url": "https://example.com",
-  "depth": 2,
-  "parallel_jobs": 10,
-  "retried_chunks": 1,
-  "failed_chunks": ["chunk_02"],
-  "run_id": "1234567890",
-  "artifact_name": "site_archive-1234567890"
-}
-```
-
-**Поля retry:**
-- `retried_chunks` — количество retry попыток (0 или 1)
-- `failed_chunks` — массив chunk IDs которые были retried
 
 ---
 
@@ -333,19 +340,22 @@ wget --timeout=30 --tries=2 --waitretry=2  # Быстрые попытки
 | Retry тоже фейлится | Permanent failure | Уменьши `parallel_jobs`, увеличь `--timeout` |
 | Merge очень маленький | Большинство retries failed | Проверь логи retry job |
 | "Thundering herd" | Все retries стартуют одновременно | Jitter распределяет (5-15 сек) |
+| Artifact не найден | Workflow failed | Проверь Job Summary для ошибок |
+| Artifact слишком большой | >10GB limit | Уменьши depth_level |
 
 ---
 
 ## 🎓 Best Practices применены
 
-1. ✅ **Exponential backoff + jitter** — [Temporal.io guide](https://temporal.io/blog/error-handling-in-distributed-systems)[web:60]
-2. ✅ **Fail-fast: false** — один failed job не останавливает остальные[web:31][web:52]
-3. ✅ **Conditional retry** — запускается только при failures[web:54]
-4. ✅ **Status tracking** — каждый chunk сохраняет статус в artifact[web:52]
-5. ✅ **Circuit breaker pattern** — retry только failed chunks, не все[web:57]
+1. ✅ **Exponential backoff + jitter** — Temporal.io guide
+2. ✅ **Fail-fast: false** — один failed job не останавливает остальные
+3. ✅ **Conditional retry** — запускается только при failures
+4. ✅ **Status tracking** — каждый chunk сохраняет статус в artifact
+5. ✅ **Circuit breaker pattern** — retry только failed chunks, не все
 6. ✅ **Validation before merge** — проверка каждого chunk перед объединением
 7. ✅ **Retry with increased limits** — больше timeout, tries, waitretry при retry
 8. ✅ **Reduced parallelism on retry** — `-j 3` вместо 5 (бережнее к серверу)
+9. ✅ **Artifacts в GitHub** — централизованное хранение результатов
 
 ---
 
@@ -359,6 +369,7 @@ wget --timeout=30 --tries=2 --waitretry=2  # Быстрые попытки
 | Avg time (10% failures) | 15 мин | 18 мин |
 | Manual intervention | Требуется | Не требуется |
 | Reliability | Средняя | Высокая |
+| Artifacts storage | External | GitHub (30d) |
 
 ---
 
@@ -376,17 +387,13 @@ gh workflow run download-site.yml \
 # ✅ Failed chunk detection
 # ✅ Automatic retry
 # ✅ Merge successful + retried chunks
+# ✅ Artifact сохраняется в GitHub
+
+# Скачать результат:
+# 1. Открой Actions → Workflow run
+# 2. Artifacts → site_archive-{run_id}.zip
 ```
 
 ---
 
-## 📚 Ссылки
-
-- [GitHub Actions Matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs)
-- [Retry Pattern in Distributed Systems](https://dev.to/diek/retry-pattern-handling-transient-failures-in-distributed-systems-i7a)[web:57]
-- [Error Handling - Temporal.io](https://temporal.io/blog/error-handling-in-distributed-systems)[web:60]
-- [GNU Parallel](https://www.gnu.org/software/parallel/)
-
----
-
-**Last updated:** 2025-12-28 — v4.0 auto-retry edition
+**Last updated:** 2025-12-28 — v5.0 (N8N removed, artifacts in GitHub)
