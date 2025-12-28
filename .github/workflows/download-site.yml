@@ -52,8 +52,14 @@ jobs:
       urls_matrix: ${{ steps.generate-matrix.outputs.matrix }}
       has_sitemap: ${{ steps.check-sitemap.outputs.exists }}
       base_domain: ${{ steps.validate.outputs.domain }}
+      total_chunks: ${{ steps.generate-matrix.outputs.total_chunks }}
     
     steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq wget
+
       - name: Validate inputs
         id: validate
         env:
@@ -107,7 +113,6 @@ jobs:
         id: extract-sitemap
         env:
           SITEMAP_URL: ${{ steps.check-sitemap.outputs.sitemap_url }}
-          PARALLEL_JOBS: ${{ github.event.inputs.parallel_jobs || 10 }}
         run: |
           set -e
           
@@ -118,14 +123,13 @@ jobs:
           
           if grep -q "<sitemap>" sitemap.xml; then
             echo "📦 Sitemap index detected, extracting nested sitemaps"
-            grep -oP '(?<=<loc>)[^<]+' sitemap.xml | while read NESTED_URL; do
+            grep -oP '(?<=<loc>)[^<]+' sitemap.xml | head -10 | while read NESTED_URL; do
               wget -q -O - "$NESTED_URL" | grep -oP '(?<=<loc>)[^<]+' >> urls.txt || true
             done
           fi
           
           TOTAL_URLS=$(wc -l < urls.txt)
           echo "✅ Extracted $TOTAL_URLS URLs from sitemap"
-          echo "total_urls=$TOTAL_URLS" >> $GITHUB_OUTPUT
 
       - name: Generate fallback URLs (no sitemap)
         if: steps.check-sitemap.outputs.exists != 'true'
@@ -149,10 +153,18 @@ jobs:
           
           split -l $CHUNK_SIZE urls.txt chunk_ -da 2
           
-          CHUNKS=$(ls chunk_* | jq -R -s -c 'split("\n")[:-1]')
-          echo "matrix={\"chunk\":$CHUNKS}" >> $GITHUB_OUTPUT
+          CHUNKS=$(ls chunk_* 2>/dev/null | jq -R -s -c 'split("\n")[:-1]')
+          TOTAL_CHUNKS=$(echo "$CHUNKS" | jq '. | length')
           
-          echo "✅ Generated matrix with $(echo $CHUNKS | jq '. | length') chunks"
+          if [ "$TOTAL_CHUNKS" -eq 0 ]; then
+            echo "❌ ERROR: No chunks generated!"
+            exit 1
+          fi
+          
+          echo "matrix={\"chunk\":$CHUNKS}" >> $GITHUB_OUTPUT
+          echo "total_chunks=$TOTAL_CHUNKS" >> $GITHUB_OUTPUT
+          
+          echo "✅ Generated matrix with $TOTAL_CHUNKS chunks"
 
       - name: Upload URL chunks
         uses: actions/upload-artifact@v4
@@ -167,7 +179,10 @@ jobs:
     needs: extract-urls
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: needs.extract-urls.outputs.urls_matrix != ''
+    if: |
+      needs.extract-urls.outputs.urls_matrix != '' &&
+      needs.extract-urls.outputs.urls_matrix != '{"chunk":[]}' &&
+      needs.extract-urls.outputs.total_chunks != '0'
     
     strategy:
       fail-fast: false
@@ -253,9 +268,8 @@ jobs:
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
           TOTAL_SIZE=$(du -sb "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo 0)
           
-          # Validation thresholds
           MIN_FILES=1
-          MIN_SIZE=1024  # 1KB minimum
+          MIN_SIZE=1024
           
           if [ "$FILE_COUNT" -lt "$MIN_FILES" ]; then
             echo "❌ Chunk validation FAILED: only $FILE_COUNT files"
@@ -319,8 +333,14 @@ jobs:
       retry_matrix: ${{ steps.analyze.outputs.retry_matrix }}
     
     steps:
+      - name: Install jq
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq
+
       - name: Download all status artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           pattern: status-*-${{ github.run_id }}
           path: statuses/
@@ -336,21 +356,28 @@ jobs:
           FAILED_CHUNKS="[]"
           FAILED_COUNT=0
           
-          if [ -d "statuses" ]; then
-            for STATUS_FILE in statuses/*.status; do
-              if [ -f "$STATUS_FILE" ]; then
-                CHUNK=$(basename "$STATUS_FILE" .status)
-                STATUS=$(cat "$STATUS_FILE")
-                
-                echo "Chunk $CHUNK: $STATUS"
-                
-                if [ "$STATUS" = "failed" ]; then
-                  FAILED_CHUNKS=$(echo "$FAILED_CHUNKS" | jq --arg chunk "$CHUNK" '. + [$chunk]')
-                  FAILED_COUNT=$((FAILED_COUNT + 1))
-                fi
-              fi
-            done
+          # Check if statuses directory exists and has files
+          if [ ! -d "statuses" ] || [ -z "$(ls -A statuses 2>/dev/null)" ]; then
+            echo "❌ WARNING: No status artifacts found - assuming all chunks failed"
+            echo "has_failures=true" >> $GITHUB_OUTPUT
+            echo "failed_chunks=[]" >> $GITHUB_OUTPUT
+            echo "retry_matrix={\"chunk\":[]}" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          
+          for STATUS_FILE in statuses/*.status; do
+            if [ -f "$STATUS_FILE" ]; then
+              CHUNK=$(basename "$STATUS_FILE" .status)
+              STATUS=$(cat "$STATUS_FILE")
+              
+              echo "Chunk $CHUNK: $STATUS"
+              
+              if [ "$STATUS" = "failed" ]; then
+                FAILED_CHUNKS=$(echo "$FAILED_CHUNKS" | jq --arg chunk "$CHUNK" '. + [$chunk]')
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+              fi
+            fi
+          done
           
           echo "failed_chunks=$FAILED_CHUNKS" >> $GITHUB_OUTPUT
           
@@ -360,7 +387,7 @@ jobs:
             echo "⚠️ Found $FAILED_COUNT failed chunks: $FAILED_CHUNKS"
           else
             echo "has_failures=false" >> $GITHUB_OUTPUT
-            echo "retry_matrix={}" >> $GITHUB_OUTPUT
+            echo "retry_matrix={\"chunk\":[]}" >> $GITHUB_OUTPUT
             echo "✅ All chunks completed successfully"
           fi
 
@@ -369,7 +396,9 @@ jobs:
     needs: [extract-urls, detect-failed-chunks]
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: needs.detect-failed-chunks.outputs.has_failures == 'true'
+    if: |
+      needs.detect-failed-chunks.outputs.has_failures == 'true' &&
+      needs.detect-failed-chunks.outputs.retry_matrix != '{"chunk":[]}'
     
     strategy:
       fail-fast: false
@@ -399,9 +428,8 @@ jobs:
           
           echo "🔄 RETRY: Starting download for failed chunk: $CHUNK"
           
-          # Exponential backoff: wait before retry
-          WAIT_TIME=$((RANDOM % 10 + 5))  # 5-15 seconds jitter
-          echo "⏳ Waiting ${WAIT_TIME}s before retry (jitter to avoid thundering herd)..."
+          WAIT_TIME=$((RANDOM % 10 + 5))
+          echo "⏳ Waiting ${WAIT_TIME}s before retry (jitter)..."
           sleep $WAIT_TIME
           
           START_TIME=$(date +%s)
@@ -465,8 +493,14 @@ jobs:
     if: always()
     
     steps:
+      - name: Install jq
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq
+
       - name: Download all chunk artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           pattern: chunk-*-${{ github.run_id }}
           path: chunks/
@@ -482,6 +516,16 @@ jobs:
           mkdir -p "$OUTPUT_DIR"
           
           echo "🔄 Merging chunks into $OUTPUT_DIR"
+          
+          # Check if chunks directory exists and has content
+          if [ ! -d "chunks" ] || [ -z "$(ls -A chunks 2>/dev/null)" ]; then
+            echo "❌ CRITICAL: No chunks to merge - all downloads failed!"
+            echo "file_count=0" >> $GITHUB_OUTPUT
+            echo "html_count=0" >> $GITHUB_OUTPUT
+            echo "dir_size=0" >> $GITHUB_OUTPUT
+            echo "merged_chunks=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           
           MERGED_COUNT=0
           for CHUNK_DIR in chunks/*/; do
@@ -501,7 +545,6 @@ jobs:
           
           echo "merged_chunks=$MERGED_COUNT" >> $GITHUB_OUTPUT
           
-          # Verify merged archive
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
           HTML_COUNT=$(find "$OUTPUT_DIR" -type f \( -name "*.html" -o -name "*.htm" \) 2>/dev/null | wc -l || echo 0)
           DIR_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0")
@@ -553,8 +596,8 @@ jobs:
           echo "- Sitemap: ${{ needs.extract-urls.outputs.has_sitemap }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [[ "$HAS_FAILURES" == "true" ]]; then
-            RETRY_COUNT=$(echo "$FAILED_CHUNKS" | jq 'length')
+          if [[ "$HAS_FAILURES" == "true" ]] && [[ "$FAILED_CHUNKS" != "[]" ]]; then
+            RETRY_COUNT=$(echo "$FAILED_CHUNKS" | jq 'length' 2>/dev/null || echo 0)
             echo "**Retry Status:**" >> $GITHUB_STEP_SUMMARY
             echo "- Failed chunks retried: $RETRY_COUNT" >> $GITHUB_STEP_SUMMARY
             echo "- Failed chunk IDs: $FAILED_CHUNKS" >> $GITHUB_STEP_SUMMARY
@@ -578,11 +621,17 @@ jobs:
         env:
           FILES: ${{ steps.merge.outputs.file_count || 0 }}
           SIZE: ${{ steps.merge.outputs.dir_size || 'unknown' }}
-          RETRY_COUNT: ${{ needs.detect-failed-chunks.outputs.has_failures == 'true' && '1' || '0' }}
+          FAILED_CHUNKS: ${{ needs.detect-failed-chunks.outputs.failed_chunks }}
+          HAS_FAILURES: ${{ needs.detect-failed-chunks.outputs.has_failures }}
         run: |
           STATUS="success"
           if [ -z "$FILES" ] || [ "$FILES" = "0" ]; then
             STATUS="failed"
+          fi
+          
+          RETRY_COUNT=0
+          if [[ "$HAS_FAILURES" == "true" ]] && [[ "$FAILED_CHUNKS" != "[]" ]]; then
+            RETRY_COUNT=$(echo "$FAILED_CHUNKS" | jq 'length' 2>/dev/null || echo 0)
           fi
           
           for i in {1..3}; do
@@ -596,7 +645,7 @@ jobs:
                 \"depth\": ${{ github.event.inputs.depth_level || 2 }},
                 \"parallel_jobs\": ${{ github.event.inputs.parallel_jobs || 10 }},
                 \"retried_chunks\": $RETRY_COUNT,
-                \"failed_chunks\": ${{ needs.detect-failed-chunks.outputs.failed_chunks }},
+                \"failed_chunks\": $FAILED_CHUNKS,
                 \"run_id\": \"${{ github.run_id }}\",
                 \"artifact_name\": \"${{ github.event.inputs.output_dir || 'site_archive' }}-${{ github.run_id }}\"
               }"; then
