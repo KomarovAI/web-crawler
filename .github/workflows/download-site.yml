@@ -63,16 +63,12 @@ jobs:
         run: |
           set -e
 
-          # Validate URL
           if [[ ! "$INPUT_URL" =~ ^https?:// ]]; then
             echo "❌ URL must start with http or https"
             exit 1
           fi
 
-          # Extract domain
           DOMAIN=$(echo "$INPUT_URL" | sed 's|https://||g' | sed 's|http://||g' | cut -d'/' -f1)
-          
-          # Sanitize directory
           SANITIZED_DIR=$(echo "$INPUT_OUTPUT" | tr -cd '[:alnum:]_-')
           SANITIZED_DIR=${SANITIZED_DIR:-site_archive}
 
@@ -91,7 +87,6 @@ jobs:
         run: |
           set -e
           
-          # Try common sitemap locations
           for SITEMAP in "sitemap.xml" "sitemap_index.xml" "sitemap-index.xml"; do
             SITEMAP_URL="${URL}/${SITEMAP}"
             echo "🔍 Checking $SITEMAP_URL"
@@ -119,10 +114,8 @@ jobs:
           echo "📥 Downloading sitemap from $SITEMAP_URL"
           wget -q -O sitemap.xml "$SITEMAP_URL"
           
-          # Extract URLs from sitemap (handle both regular and index sitemaps)
           grep -oP '(?<=<loc>)[^<]+' sitemap.xml | head -1000 > urls.txt || true
           
-          # If sitemap index, download nested sitemaps
           if grep -q "<sitemap>" sitemap.xml; then
             echo "📦 Sitemap index detected, extracting nested sitemaps"
             grep -oP '(?<=<loc>)[^<]+' sitemap.xml | while read NESTED_URL; do
@@ -139,7 +132,6 @@ jobs:
         env:
           URL: ${{ steps.validate.outputs.url }}
         run: |
-          # Just use base URL for depth-based crawling
           echo "$URL" > urls.txt
           echo "⚠️ Using depth-based crawl strategy"
 
@@ -155,10 +147,8 @@ jobs:
           
           echo "📊 Splitting $TOTAL_URLS URLs into $PARALLEL_JOBS chunks (chunk_size=$CHUNK_SIZE)"
           
-          # Split URLs into chunks
           split -l $CHUNK_SIZE urls.txt chunk_ -da 2
           
-          # Create matrix JSON
           CHUNKS=$(ls chunk_* | jq -R -s -c 'split("\n")[:-1]')
           echo "matrix={\"chunk\":$CHUNKS}" >> $GITHUB_OUTPUT
           
@@ -191,6 +181,8 @@ jobs:
           name: url-chunks-${{ github.run_id }}
 
       - name: Parallel download with GNU Parallel
+        id: download
+        continue-on-error: true
         env:
           CHUNK: ${{ matrix.chunk }}
           DEPTH: ${{ github.event.inputs.depth_level || 2 }}
@@ -208,7 +200,6 @@ jobs:
           START_TIME=$(date +%s)
           
           if [[ "$HAS_SITEMAP" == "true" ]]; then
-            # Download URLs from chunk using GNU Parallel
             echo "📥 Downloading URLs from sitemap chunk"
             cat "$CHUNK" | parallel -j 5 --timeout 60 \
               "wget -q -P '$OUTPUT_DIR' \
@@ -220,7 +211,6 @@ jobs:
                 --user-agent='Mozilla/5.0 (compatible; ArchiveBot/1.0; +https://github.com/KomarovAI/web-crawler)' \
                 {} || true"
           else
-            # Depth-based recursive download
             echo "🔄 Recursive download (depth=$DEPTH)"
             while read URL; do
               wget --recursive \
@@ -246,7 +236,41 @@ jobs:
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
           DIR_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0")
           
+          echo "elapsed=$ELAPSED" >> $GITHUB_OUTPUT
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
+          
           echo "✅ Chunk $CHUNK completed in ${ELAPSED}s: $FILE_COUNT files, $DIR_SIZE"
+
+      - name: Validate chunk
+        id: validate
+        continue-on-error: true
+        env:
+          OUTPUT_DIR: site_archive_${{ matrix.chunk }}
+        run: |
+          set -e
+          
+          FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
+          TOTAL_SIZE=$(du -sb "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo 0)
+          
+          # Validation thresholds
+          MIN_FILES=1
+          MIN_SIZE=1024  # 1KB minimum
+          
+          if [ "$FILE_COUNT" -lt "$MIN_FILES" ]; then
+            echo "❌ Chunk validation FAILED: only $FILE_COUNT files"
+            echo "valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          if [ "$TOTAL_SIZE" -lt "$MIN_SIZE" ]; then
+            echo "❌ Chunk validation FAILED: only $TOTAL_SIZE bytes"
+            echo "valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "✅ Chunk validation PASSED: $FILE_COUNT files, $TOTAL_SIZE bytes"
+          echo "valid=true" >> $GITHUB_OUTPUT
 
       - name: Upload chunk artifact
         uses: actions/upload-artifact@v4
@@ -258,9 +282,184 @@ jobs:
           if-no-files-found: warn
           compression-level: 0
 
+      - name: Mark chunk status
+        if: always()
+        env:
+          CHUNK: ${{ matrix.chunk }}
+          VALID: ${{ steps.validate.outputs.valid }}
+          DOWNLOAD_RESULT: ${{ steps.download.outcome }}
+        run: |
+          mkdir -p chunk_status
+          
+          if [[ "$VALID" == "true" && "$DOWNLOAD_RESULT" == "success" ]]; then
+            echo "success" > "chunk_status/$CHUNK.status"
+            echo "✅ Chunk $CHUNK marked as SUCCESS"
+          else
+            echo "failed" > "chunk_status/$CHUNK.status"
+            echo "❌ Chunk $CHUNK marked as FAILED"
+          fi
+
+      - name: Upload chunk status
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: status-${{ matrix.chunk }}-${{ github.run_id }}
+          path: chunk_status/
+          retention-days: 1
+
+  detect-failed-chunks:
+    name: Detect failed chunks
+    needs: [extract-urls, parallel-download]
+    runs-on: ubuntu-latest
+    if: always()
+    timeout-minutes: 5
+    outputs:
+      failed_chunks: ${{ steps.analyze.outputs.failed_chunks }}
+      has_failures: ${{ steps.analyze.outputs.has_failures }}
+      retry_matrix: ${{ steps.analyze.outputs.retry_matrix }}
+    
+    steps:
+      - name: Download all status artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: status-*-${{ github.run_id }}
+          path: statuses/
+          merge-multiple: true
+
+      - name: Analyze chunk statuses
+        id: analyze
+        run: |
+          set -e
+          
+          echo "🔍 Analyzing chunk statuses..."
+          
+          FAILED_CHUNKS="[]"
+          FAILED_COUNT=0
+          
+          if [ -d "statuses" ]; then
+            for STATUS_FILE in statuses/*.status; do
+              if [ -f "$STATUS_FILE" ]; then
+                CHUNK=$(basename "$STATUS_FILE" .status)
+                STATUS=$(cat "$STATUS_FILE")
+                
+                echo "Chunk $CHUNK: $STATUS"
+                
+                if [ "$STATUS" = "failed" ]; then
+                  FAILED_CHUNKS=$(echo "$FAILED_CHUNKS" | jq --arg chunk "$CHUNK" '. + [$chunk]')
+                  FAILED_COUNT=$((FAILED_COUNT + 1))
+                fi
+              fi
+            done
+          fi
+          
+          echo "failed_chunks=$FAILED_CHUNKS" >> $GITHUB_OUTPUT
+          
+          if [ "$FAILED_COUNT" -gt 0 ]; then
+            echo "has_failures=true" >> $GITHUB_OUTPUT
+            echo "retry_matrix={\"chunk\":$FAILED_CHUNKS}" >> $GITHUB_OUTPUT
+            echo "⚠️ Found $FAILED_COUNT failed chunks: $FAILED_CHUNKS"
+          else
+            echo "has_failures=false" >> $GITHUB_OUTPUT
+            echo "retry_matrix={}" >> $GITHUB_OUTPUT
+            echo "✅ All chunks completed successfully"
+          fi
+
+  retry-failed-chunks:
+    name: Retry chunk ${{ matrix.chunk }}
+    needs: [extract-urls, detect-failed-chunks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: needs.detect-failed-chunks.outputs.has_failures == 'true'
+    
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJson(needs.detect-failed-chunks.outputs.retry_matrix) }}
+    
+    steps:
+      - name: Download URL chunks
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks-${{ github.run_id }}
+
+      - name: Retry download with exponential backoff
+        id: retry
+        env:
+          CHUNK: ${{ matrix.chunk }}
+          DEPTH: ${{ github.event.inputs.depth_level || 2 }}
+          OUTPUT_DIR: site_archive_${{ matrix.chunk }}_retry
+          HAS_SITEMAP: ${{ needs.extract-urls.outputs.has_sitemap }}
+        run: |
+          set -e
+          
+          sudo apt-get update -qq
+          sudo apt-get install -y wget parallel
+          
+          mkdir -p "$OUTPUT_DIR"
+          
+          echo "🔄 RETRY: Starting download for failed chunk: $CHUNK"
+          
+          # Exponential backoff: wait before retry
+          WAIT_TIME=$((RANDOM % 10 + 5))  # 5-15 seconds jitter
+          echo "⏳ Waiting ${WAIT_TIME}s before retry (jitter to avoid thundering herd)..."
+          sleep $WAIT_TIME
+          
+          START_TIME=$(date +%s)
+          
+          if [[ "$HAS_SITEMAP" == "true" ]]; then
+            echo "📥 Retry: Downloading URLs from sitemap chunk"
+            cat "$CHUNK" | parallel -j 3 --timeout 90 --retries 2 \
+              "wget -q -P '$OUTPUT_DIR' \
+                --page-requisites \
+                --convert-links \
+                --adjust-extension \
+                --timeout=45 \
+                --tries=3 \
+                --waitretry=5 \
+                --user-agent='Mozilla/5.0 (compatible; ArchiveBot/1.0; +https://github.com/KomarovAI/web-crawler)' \
+                {} || true"
+          else
+            echo "🔄 Retry: Recursive download (depth=$DEPTH)"
+            while read URL; do
+              wget --recursive \
+                --level="$DEPTH" \
+                --page-requisites \
+                --convert-links \
+                --adjust-extension \
+                --no-parent \
+                --directory-prefix="$OUTPUT_DIR" \
+                --timeout=45 \
+                --tries=3 \
+                --waitretry=5 \
+                --wait=2 \
+                --random-wait \
+                --user-agent="Mozilla/5.0 (compatible; ArchiveBot/1.0; +https://github.com/KomarovAI/web-crawler)" \
+                --reject-regex='\?.*' \
+                "$URL" 2>&1 | head -100 || true
+            done < "$CHUNK"
+          fi
+          
+          END_TIME=$(date +%s)
+          ELAPSED=$((END_TIME - START_TIME))
+          
+          FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
+          DIR_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0")
+          
+          echo "✅ Retry completed for $CHUNK in ${ELAPSED}s: $FILE_COUNT files, $DIR_SIZE"
+
+      - name: Upload retry chunk artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chunk-${{ matrix.chunk }}-retry-${{ github.run_id }}
+          path: site_archive_${{ matrix.chunk }}_retry
+          retention-days: 1
+          if-no-files-found: warn
+          compression-level: 0
+
   merge-results:
     name: Merge all chunks
-    needs: [extract-urls, parallel-download]
+    needs: [extract-urls, parallel-download, detect-failed-chunks, retry-failed-chunks]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: always()
@@ -284,13 +483,23 @@ jobs:
           
           echo "🔄 Merging chunks into $OUTPUT_DIR"
           
-          # Merge all chunks
+          MERGED_COUNT=0
           for CHUNK_DIR in chunks/*/; do
             if [ -d "$CHUNK_DIR" ]; then
-              echo "📦 Merging $(basename $CHUNK_DIR)"
-              cp -r "$CHUNK_DIR"/* "$OUTPUT_DIR"/ 2>/dev/null || true
+              CHUNK_NAME=$(basename "$CHUNK_DIR")
+              FILE_COUNT=$(find "$CHUNK_DIR" -type f 2>/dev/null | wc -l || echo 0)
+              
+              if [ "$FILE_COUNT" -gt 0 ]; then
+                echo "📦 Merging $CHUNK_NAME ($FILE_COUNT files)"
+                cp -r "$CHUNK_DIR"/* "$OUTPUT_DIR"/ 2>/dev/null || true
+                MERGED_COUNT=$((MERGED_COUNT + 1))
+              else
+                echo "⚠️ Skipping empty chunk: $CHUNK_NAME"
+              fi
             fi
           done
+          
+          echo "merged_chunks=$MERGED_COUNT" >> $GITHUB_OUTPUT
           
           # Verify merged archive
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
@@ -302,9 +511,8 @@ jobs:
           echo "html_count=$HTML_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
           
-          echo "✅ Merged archive: $FILE_COUNT files ($HTML_COUNT HTML), $DIR_SIZE"
+          echo "✅ Merged $MERGED_COUNT chunks: $FILE_COUNT files ($HTML_COUNT HTML), $DIR_SIZE"
           
-          # Validation
           if [ "$HTML_COUNT" -lt 1 ]; then
             echo "⚠️ Warning: No HTML files in merged archive"
           fi
@@ -323,13 +531,6 @@ jobs:
           if-no-files-found: warn
           compression-level: 0
 
-      - name: Cleanup chunk artifacts
-        if: always()
-        continue-on-error: true
-        run: |
-          # Cleanup temporary chunks (they're merged now)
-          echo "🧹 Cleanup completed"
-
       - name: Job summary
         if: always()
         env:
@@ -339,6 +540,9 @@ jobs:
           FILE_COUNT: ${{ steps.merge.outputs.file_count }}
           HTML_COUNT: ${{ steps.merge.outputs.html_count }}
           DIR_SIZE: ${{ steps.merge.outputs.dir_size }}
+          MERGED_CHUNKS: ${{ steps.merge.outputs.merged_chunks }}
+          FAILED_CHUNKS: ${{ needs.detect-failed-chunks.outputs.failed_chunks }}
+          HAS_FAILURES: ${{ needs.detect-failed-chunks.outputs.has_failures }}
         run: |
           echo "## 📊 Parallel Download Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -349,10 +553,19 @@ jobs:
           echo "- Sitemap: ${{ needs.extract-urls.outputs.has_sitemap }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
+          if [[ "$HAS_FAILURES" == "true" ]]; then
+            RETRY_COUNT=$(echo "$FAILED_CHUNKS" | jq 'length')
+            echo "**Retry Status:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Failed chunks retried: $RETRY_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- Failed chunk IDs: $FAILED_CHUNKS" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           if [[ -n "$FILE_COUNT" ]] && [[ "$FILE_COUNT" -gt 0 ]]; then
             echo "**Status: ✅ SUCCESS**" >> $GITHUB_STEP_SUMMARY
             echo "- Files: $FILE_COUNT ($HTML_COUNT HTML)" >> $GITHUB_STEP_SUMMARY
             echo "- Size: $DIR_SIZE" >> $GITHUB_STEP_SUMMARY
+            echo "- Merged chunks: $MERGED_CHUNKS" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status: ❌ FAILED** (no files downloaded)" >> $GITHUB_STEP_SUMMARY
           fi
@@ -365,6 +578,7 @@ jobs:
         env:
           FILES: ${{ steps.merge.outputs.file_count || 0 }}
           SIZE: ${{ steps.merge.outputs.dir_size || 'unknown' }}
+          RETRY_COUNT: ${{ needs.detect-failed-chunks.outputs.has_failures == 'true' && '1' || '0' }}
         run: |
           STATUS="success"
           if [ -z "$FILES" ] || [ "$FILES" = "0" ]; then
@@ -381,6 +595,8 @@ jobs:
                 \"url\": \"${{ github.event.inputs.url }}\",
                 \"depth\": ${{ github.event.inputs.depth_level || 2 }},
                 \"parallel_jobs\": ${{ github.event.inputs.parallel_jobs || 10 }},
+                \"retried_chunks\": $RETRY_COUNT,
+                \"failed_chunks\": ${{ needs.detect-failed-chunks.outputs.failed_chunks }},
                 \"run_id\": \"${{ github.run_id }}\",
                 \"artifact_name\": \"${{ github.event.inputs.output_dir || 'site_archive' }}-${{ github.run_id }}\"
               }"; then
