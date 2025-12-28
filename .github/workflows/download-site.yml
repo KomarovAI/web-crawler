@@ -22,11 +22,6 @@ on:
           - '2'
           - '3'
           - '4'
-      output_dir:
-        description: 'Output directory name (alphanumeric, dash, underscore only)'
-        required: false
-        default: 'site_archive'
-        type: string
       parallel_jobs:
         description: 'Number of parallel download jobs (1-10)'
         required: false
@@ -49,6 +44,7 @@ jobs:
       has_sitemap: ${{ steps.check-sitemap.outputs.exists }}
       base_domain: ${{ steps.validate.outputs.domain }}
       total_chunks: ${{ steps.generate-matrix.outputs.total_chunks }}
+      output_name: ${{ steps.validate.outputs.output_name }}
     
     steps:
       - name: Install dependencies
@@ -61,7 +57,6 @@ jobs:
         env:
           INPUT_URL: ${{ github.event.inputs.url || 'https://callmedley.com' }}
           INPUT_DEPTH: ${{ github.event.inputs.depth_level || '2' }}
-          INPUT_OUTPUT: ${{ github.event.inputs.output_dir || 'site_archive' }}
         run: |
           set -e
 
@@ -71,15 +66,15 @@ jobs:
           fi
 
           DOMAIN=$(echo "$INPUT_URL" | sed 's|https://||g' | sed 's|http://||g' | cut -d'/' -f1)
-          SANITIZED_DIR=$(echo "$INPUT_OUTPUT" | tr -cd '[:alnum:]_-')
-          SANITIZED_DIR=${SANITIZED_DIR:-site_archive}
+          OUTPUT_NAME=$(echo "$DOMAIN" | tr '.' '_' | tr -cd '[:alnum:]_-')
+          OUTPUT_NAME=${OUTPUT_NAME:-site_archive}
 
-          echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
           echo "url=$INPUT_URL" >> $GITHUB_OUTPUT
           echo "depth_level=$INPUT_DEPTH" >> $GITHUB_OUTPUT
           echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "output_name=$OUTPUT_NAME" >> $GITHUB_OUTPUT
           
-          echo "📋 Validated: $DOMAIN | depth=$INPUT_DEPTH"
+          echo "📋 Validated: $DOMAIN | depth=$INPUT_DEPTH | output=$OUTPUT_NAME"
 
       - name: Check for sitemap.xml
         id: check-sitemap
@@ -503,14 +498,12 @@ jobs:
 
       - name: Merge chunks
         id: merge
-        env:
-          OUTPUT_DIR: ${{ github.event.inputs.output_dir || 'site_archive' }}
         run: |
           set -e
           
-          mkdir -p "$OUTPUT_DIR"
+          mkdir -p merged_site
           
-          echo "🔄 Merging chunks into $OUTPUT_DIR"
+          echo "🔄 Merging chunks into merged_site"
           
           if [ ! -d "chunks" ] || [ -z "$(ls -A chunks 2>/dev/null)" ]; then
             echo "❌ CRITICAL: No chunks to merge - all downloads failed!"
@@ -529,7 +522,7 @@ jobs:
               
               if [ "$FILE_COUNT" -gt 0 ]; then
                 echo "📦 Merging $CHUNK_NAME ($FILE_COUNT files)"
-                cp -r "$CHUNK_DIR"/* "$OUTPUT_DIR"/ 2>/dev/null || true
+                cp -r "$CHUNK_DIR"/* merged_site/ 2>/dev/null || true
                 MERGED_COUNT=$((MERGED_COUNT + 1))
               else
                 echo "⚠️ Skipping empty chunk: $CHUNK_NAME"
@@ -539,10 +532,10 @@ jobs:
           
           echo "merged_chunks=$MERGED_COUNT" >> $GITHUB_OUTPUT
           
-          FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
-          HTML_COUNT=$(find "$OUTPUT_DIR" -type f \( -name "*.html" -o -name "*.htm" \) 2>/dev/null | wc -l || echo 0)
-          DIR_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0")
-          TOTAL_SIZE=$(du -sb "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo 0)
+          FILE_COUNT=$(find merged_site -type f 2>/dev/null | wc -l || echo 0)
+          HTML_COUNT=$(find merged_site -type f \( -name "*.html" -o -name "*.htm" \) 2>/dev/null | wc -l || echo 0)
+          DIR_SIZE=$(du -sh merged_site 2>/dev/null | cut -f1 || echo "0")
+          TOTAL_SIZE=$(du -sb merged_site 2>/dev/null | cut -f1 || echo 0)
           
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "html_count=$HTML_COUNT" >> $GITHUB_OUTPUT
@@ -562,8 +555,8 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ github.event.inputs.output_dir || 'site_archive' }}-${{ github.run_id }}
-          path: ${{ github.event.inputs.output_dir || 'site_archive' }}
+          name: ${{ needs.extract-urls.outputs.output_name }}-${{ github.run_id }}
+          path: merged_site
           retention-days: 30
           if-no-files-found: warn
           compression-level: 0
@@ -580,6 +573,7 @@ jobs:
           MERGED_CHUNKS: ${{ steps.merge.outputs.merged_chunks }}
           FAILED_CHUNKS: ${{ needs.detect-failed-chunks.outputs.failed_chunks }}
           HAS_FAILURES: ${{ needs.detect-failed-chunks.outputs.has_failures }}
+          OUTPUT_NAME: ${{ needs.extract-urls.outputs.output_name }}
         run: |
           echo "## 📊 Parallel Download Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -606,7 +600,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Download artifact:**" >> $GITHUB_STEP_SUMMARY
             echo "- Go to Actions tab → This workflow run → Artifacts section" >> $GITHUB_STEP_SUMMARY
-            echo "- Artifact name: \`${{ github.event.inputs.output_dir || 'site_archive' }}-${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Artifact name: \`$OUTPUT_NAME-${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- Retention: 30 days" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status: ❌ FAILED** (no files downloaded)" >> $GITHUB_STEP_SUMMARY
