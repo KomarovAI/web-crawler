@@ -209,6 +209,7 @@ jobs:
             echo "📥 Downloading URLs from sitemap chunk"
             cat "$CHUNK" | parallel -j 5 --timeout 60 \
               "wget -q -P '$OUTPUT_DIR' \
+                --execute robots=off \
                 --page-requisites \
                 --convert-links \
                 --adjust-extension \
@@ -221,6 +222,7 @@ jobs:
             while read URL; do
               wget --recursive \
                 --level="$DEPTH" \
+                --execute robots=off \
                 --page-requisites \
                 --convert-links \
                 --adjust-extension \
@@ -428,6 +430,7 @@ jobs:
             echo "📥 Retry: Downloading URLs from sitemap chunk"
             cat "$CHUNK" | parallel -j 3 --timeout 90 --retries 2 \
               "wget -q -P '$OUTPUT_DIR' \
+                --execute robots=off \
                 --page-requisites \
                 --convert-links \
                 --adjust-extension \
@@ -441,6 +444,7 @@ jobs:
             while read URL; do
               wget --recursive \
                 --level="$DEPTH" \
+                --execute robots=off \
                 --page-requisites \
                 --convert-links \
                 --adjust-extension \
@@ -582,6 +586,7 @@ jobs:
           echo "- Depth: $DEPTH" >> $GITHUB_STEP_SUMMARY
           echo "- Parallel Jobs: $PARALLEL runners" >> $GITHUB_STEP_SUMMARY
           echo "- Sitemap: ${{ needs.extract-urls.outputs.has_sitemap }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Ignore robots.txt: ✅ YES" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "$HAS_FAILURES" == "true" ]] && [[ "$FAILED_CHUNKS" != "[]" ]]; then
