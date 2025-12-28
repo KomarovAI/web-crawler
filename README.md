@@ -1,347 +1,174 @@
-# 🔥 Professional Website Archiver
+# web-crawler
 
-**Purpose:** 🤖 Reliable website archival for offline access  
-**Status:** ✅ Production Ready (with security hardening)  
-**Current Version:** 2.1 (Hardened)  
-**Auto-Execute:** GitHub Actions on-demand  
+**ВНИМАНИЕ: ЭТОТ РЕПОЗИТОРИЙ — ИСКЛЮЧИТЕЛЬНО ДЛЯ ИИ.**  
+**РЕЖИМ:** token-first (максимальная экономия токенов).  
+**ЗАПРЕЩЕНО:** плодить сущности, разводить грязь документацией, создавать ненужные файлы/папки/конфиги.
 
----
+## 🎯 Что здесь
 
-## 🌟 Features
-
-### Core Capabilities
-- ✅ **Complete asset download** - HTML, CSS, JS, images, fonts, video, audio
-- ✅ **Offline-ready** - All links converted to relative URLs
-- ✅ **Production hardened** - Security validation, timeout protection, size limits
-- ✅ **Rate-limited** - Ethical crawling with request delays
-- ✅ **Zero dependencies** - Uses system `wget` + Python 3.11 stdlib
-
-### Security Features
-- ✅ **URL validation** - Blocks private IPs, localhost, invalid schemes
-- ✅ **Path traversal protection** - Sanitized output directory
-- ✅ **Subprocess timeout** - 1 hour max for any download
-- ✅ **File size limits** - 5GB maximum per archive
-- ✅ **Rate limiting** - 2 second delays, 500KB/s max
+- `.github/workflows/download-site.yml` — скачивает сайты через wget, создает artifacts
+- `.gitignore` — стандартный Git-конфиг
+- `README.md` — этот файл
+- `WORKFLOWS_GUIDE.md` — детальная документация workflow
 
 ---
 
-## 🚀 Quick Start
+## 📋 download-site.yml
 
-### Installation
-```bash
-git clone https://github.com/KomarovAI/web-crawler
-cd web-crawler
-# No pip install needed - uses system wget
-```
+**Trigger:** `workflow_dispatch` (ручной запуск)
 
-### Usage (Local)
-```bash
-# Download site to local machine
-python3 crawler.py https://example.com output_dir
+**Inputs:**
+- `url` (опционально, default: `https://callmedley.com`) — URL сайта для скачивания
+- `depth_level` (опционально, default: `2`) — глубина краулинга:
+  - `1` = только homepage
+  - `2` = homepage + дочерние страницы (default)
+  - `3` = homepage + 2 уровня вглубь
+  - `4` = очень глубокий краулинг
+- `output_dir` (опционально, default: `site_archive`) — имя директории для выхода (alphanumeric, dash, underscore)
+- `resumeUrl` (опционально) — N8N webhook URL для callback
 
-# Output structure:
-# output_dir/
-# └─ example.com/              # Domain folder
-#    ├─ index.html             # Auto-generated navigation
-#    ├─ manifest.json          # Metadata
-#    ├─ page1.html
-#    ├─ page2.html
-#    └─ assets/
-#       ├─ images/             # All images
-#       ├─ styles/             # All CSS
-#       ├─ scripts/            # All JS
-#       └─ media/              # Videos, audio
-```
+**Что делает:**
 
-### Usage (GitHub Actions)
+1. ✅ Валидирует inputs (URL format, depth range, sanitized output_dir)
+2. 🌐 Скачивает сайт через `wget --recursive` с заданной глубиной
+3. ✅ Конвертирует ссылки в относительные (`--convert-links`)
+4. ✅ Добавляет расширения HTML (`--adjust-extension`)
+5. ✅ Применяет timeout/retry (30s timeout, 3 tries)
+6. 📦 Верифицирует архив (file count, size)
+7. ☁️ Загружает как artifact (30 дней retention)
+8. 📊 Создает job summary в Actions UI
+9. 🔔 Отправляет callback в N8N (если `resumeUrl` указан)
 
-1. Go to **Actions** tab → **Download Site with Wget**
-2. Click **Run workflow**
-3. Enter:
-   - **URL:** `https://your-domain.com`
-   - **Output dir:** `site_archive` (or custom name)
-4. Wait 2-10 minutes (depends on site size)
-5. Download artifact from run summary
+**Outputs (artifact):**
+- Имя: `{output_dir}-{run_id}`
+- Путь: весь контент из `{output_dir}/`
+- Compression: level 0 (без сжатия для скорости)
+- Retention: 30 дней
 
----
-
-## 📄 Output Structure
-
-```
-site_archive/
-└─ domain.com/
-   ├─ index.html                🌐 Auto-generated entry point
-   ├─ manifest.json             📋 Metadata (timestamps, stats)
-   ├─ page1.html                📄 HTML pages
-   ├─ page2.html
-   ├─ about/
-   │  └─ index.html
-   ├─ blog/
-   │  ├─ post1.html
-   │  └─ post2.html
-   └─ assets/
-      ├─ images/
-      │  ├─ logo.png             🖼️ All image types
-      │  ├─ banner.jpg
-      │  └─ icon.svg
-      ├─ styles/
-      │  └─ main.css              🎨 All CSS files
-      ├─ scripts/
-      │  └─ app.js                ⚙️ All JS files
-      ├─ fonts/
-      │  ├─ font.woff            📋 Web fonts
-      │  └─ font.ttf
-      └─ media/
-         ├─ video.mp4             🎬 Video files
-         └─ audio.mp3             🎙️ Audio files
-```
-
-**Key feature:** All links in HTML are relative (e.g., `./assets/images/logo.png`)
-
----
-
-## 🛠️ Deployment
-
-### Option 1: Static Web Server (Production)
-```bash
-# Copy to web server
-sudo cp -r domain.com /var/www/html/
-
-# Access at: http://your-server/domain.com/
-```
-
-### Option 2: Python (Testing)
-```bash
-cd domain.com
-python3 -m http.server 8000
-# Access at: http://localhost:8000
-```
-
-### Option 3: Docker (Production)
-```bash
-docker run -d \
-  -p 80:80 \
-  -v $(pwd)/domain.com:/usr/share/nginx/html:ro \
-  nginx:latest
-```
-
-### Option 4: GitHub Pages (Free)
-```bash
-# Commit to your repo
-git add domain.com/
-git commit -m "Add domain.com archive"
-git push
-
-# GitHub Pages serves it automatically
-```
-
----
-
-## 📊 Statistics Example
-
+**Outputs (N8N callback):**
 ```json
 {
-  "domain": "example.com",
-  "start_url": "https://example.com",
-  "archive_date": "2025-12-23T04:00:29.123456",
-  "status": "complete",
-  "file_count": 1524,
-  "html_count": 42,
-  "image_count": 312,
-  "css_count": 8,
-  "js_count": 15,
-  "total_size_mb": 145.32,
-  "warnings": [],
-  "errors": [],
-  "version": "2.1"
+  "status": "success",
+  "files": 42,
+  "size": "15M",
+  "url": "https://callmedley.com",
+  "depth": 2,
+  "time": 120,
+  "run_id": "1234567890",
+  "artifact_name": "site_archive-1234567890"
 }
 ```
 
 ---
 
-## 🔐 Security & Limits
+## 🚀 Quick Start
 
-| Feature | Setting | Reason |
-|---------|---------|--------|
-| **URL validation** | Blocks private IPs | Prevent scanning internal networks |
-| **Max download time** | 1 hour | Prevent indefinite hangs |
-| **Max archive size** | 5 GB | Prevent disk fill |
-| **Request delay** | 2 seconds | Ethical crawling |
-| **Rate limit** | 500 KB/s | Don't overwhelm servers |
-| **Path traversal** | Blocked | Prevent `../` attacks |
+### Basic download (default depth=2):
+```bash
+gh workflow run download-site.yml \
+  -f url=https://example.com
+```
 
----
+### Deep crawl (depth=4):
+```bash
+gh workflow run download-site.yml \
+  -f url=https://example.com \
+  -f depth_level=4 \
+  -f output_dir=example_deep
+```
 
-## ⚠️ Known Limitations
-
-- **JavaScript-heavy sites** - Static download won't render JS. Use `--use_selenium=true` for JavaScript-dependent sites (GitHub Actions option).
-- **Login-required content** - Can't authenticate. Must be publicly accessible.
-- **Dynamic content** - Only downloads HTML snapshot at crawl time.
-- **Large media files** - May hit 5GB limit on image/video-heavy sites. Adjust in code if needed.
-
----
-
-## 🚫 What Changed from v5.2
-
-Old version (`smart_archiver_v4.py`) had issues:
-- \u274c Silent failures in GitHub Actions
-- \u274c Complex async/Selenium overhead
-- \u274c Missing dependencies (`asset_extractor`)
-- \u274c Over-engineered for simple task (WARC, SQLite)
-
-New version (`crawler.py v2.1`) is:
-- ✅ Simple and reliable (wget wrapper)
-- ✅ No external dependencies
-- ✅ Explicit error handling
-- ✅ Security hardened
-- ✅ Production ready
+### With N8N callback:
+```bash
+gh workflow run download-site.yml \
+  -f url=https://callmedley.com \
+  -f resumeUrl=https://your-n8n.com/webhook/abc123
+```
 
 ---
 
-## 📚 Workflow Configuration
-
-### File: `.github/workflows/download-site.yml`
-
-**Triggers:**
-- Manual dispatch (via Actions tab)
-- Inputs:
-  - `url` - Website to archive (required)
-  - `output_dir` - Folder name (optional, default: `site_archive`)
-
-**Steps:**
-1. Checkout repo
-2. Install `wget`
-3. Setup Python 3.11
-4. Validate inputs
-5. Run `crawler.py`
-6. Verify archive
-7. Upload as artifact (30 day retention)
-
-**Outputs:**
-- GitHub Actions artifact (auto-downloads)
-- Job summary with stats
-
----
-
-## 🛠️ Command-Line Options
+## 🔧 Wget Flags
 
 ```bash
-python3 crawler.py <URL> <output_directory>
-
-Arguments:
-  URL                 - Full URL to start crawling from
-                        Must be http:// or https://
-                        Example: https://example.com
-  
-  output_directory    - Where to save files
-                        Relative or absolute path
-                        Example: ./archives
-
-Example:
-  python3 crawler.py https://callmedley.com site_archive
-
-Limits:
-  - Max time: 1 hour
-  - Max size: 5 GB
-  - Rate: 2s/request, 500KB/s max
-  - Blocks: private IPs, localhost
+wget --recursive \
+  --level="$DEPTH" \
+  --convert-links \
+  --adjust-extension \
+  --no-parent \
+  --directory-prefix="$OUTPUT_DIR" \
+  --timeout=30 \
+  --tries=3 \
+  --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+  --reject-regex='\?.*' \
+  "$URL"
 ```
+
+**Почему эти флаги:**
+- `--recursive` — скачивает всю структуру сайта
+- `--level=N` — ограничивает глубину краулинга
+- `--convert-links` — переписывает абсолютные ссылки → относительные
+- `--adjust-extension` — добавляет `.html` если нет расширения
+- `--no-parent` — не выходит выше стартовой директории
+- `--timeout=30` — 30 сек на запрос
+- `--tries=3` — 3 попытки при ошибке
+- `--reject-regex='\?.*'` — игнорирует query strings (избегает дублей)
 
 ---
 
-## 📚 Tech Stack
+## 📊 Exit Codes
 
-```
-Core:
-  ✓ Python 3.11+
-  ✓ wget (system utility)
-  ✓ Standard library only (no pip packages)
+| Code | Meaning | Workflow Result |
+|------|---------|----------------|
+| 0 | Success | ✅ SUCCESS |
+| 8 | Server error (404, 500, etc.) | ✅ SUCCESS (partial download OK) |
+| Other | Fatal error | ❌ FAILED |
 
-GitHub Actions:
-  ✓ Ubuntu 24.04
-  ✓ Python 3.11
-  ✓ Artifact storage (30 days)
-```
+**Почему exit code 8 считается успехом:**  
+Сайты часто имеют несколько сломанных ссылок (404). Если основной контент скачан, это успех.
 
 ---
 
-## ❌ Error Handling
+## 🔐 N8N Integration
 
-### Common Issues
+**Workflow → N8N callback payload:**
+```json
+{
+  "status": "success" | "failed",
+  "files": 42,
+  "size": "15M",
+  "url": "https://callmedley.com",
+  "depth": 2,
+  "time": 120,
+  "run_id": "1234567890",
+  "artifact_name": "site_archive-1234567890"
+}
+```
 
-**Issue:** Archive is empty
-```
-❌ ERROR: Archive directory '$ARCHIVE_PATH' is empty
-```
-**Cause:** wget didn't download anything  
-**Solution:** Check if site exists, firewall blocks, or uses JavaScript
-
-**Issue:** Download timeout
-```
-❌ ERROR: Download exceeded 3600s timeout
-```
-**Cause:** Site too large or server too slow  
-**Solution:** Try smaller domain subset or increase `SUBPROCESS_TIMEOUT`
-
-**Issue:** URL validation failed
-```
-❌ URL validation failed: Private IP not allowed: 192.168.1.1
-```
-**Cause:** Trying to crawl internal/private network  
-**Solution:** Only public websites allowed
+**Использование в N8N:**
+1. Создайте Webhook node
+2. Скопируйте Production URL
+3. Передайте в workflow как `resumeUrl`
+4. Парсите `artifact_name` для download через GitHub API
 
 ---
 
-## 🔍 Debugging
+## 🔧 Common Issues
 
-### Enable verbose logging
-```bash
-# Already enabled - shows all wget output
-python3 crawler.py https://example.com output
-```
-
-### Check metadata
-```bash
-# After download, inspect manifest
-cat output/example.com/manifest.json | python3 -m json.tool
-```
-
-### Test locally first
-```bash
-# Small site for testing
-python3 crawler.py https://example.com test_output
-```
+| Issue | Fix |
+|-------|-----|
+| Artifact empty | Сайт требует JS или блокирует wget |
+| File count = 0 | URL недоступен или неверный |
+| Wget exit code 1 | URL validation failed |
+| Callback failed | N8N webhook недоступен (soft fail) |
+| Output dir sanitized | Используйте только `[a-zA-Z0-9_-]` |
 
 ---
 
-## 🐝 Contributing
+## 📚 Related
 
-Ideas for improvements:
-- [ ] Selenium support for JavaScript-heavy sites
-- [ ] Compression (GZIP for archive)
-- [ ] Sitemap generation
-- [ ] Link extraction report
-- [ ] Filtering (include/exclude patterns)
+- **Deploy-page** — деплоит artifacts на GitHub Pages
+- [GitHub Actions docs](https://docs.github.com/en/actions)
+- [wget manual](https://www.gnu.org/software/wget/manual/)
 
 ---
 
-## 📄 License
-
-MIT License - Free for personal and commercial use
-
----
-
-## 📊 Status
-
-```
-✅ Functionality:     COMPLETE
-✅ Security:         HARDENED
-✅ Reliability:      PRODUCTION READY
-✅ Error Handling:   EXPLICIT
-✅ Testing:          TODO (contributions welcome)
-✅ Documentation:    CURRENT
-```
-
----
-
-**Built for professionals. Reliable. Simple. Secure.** 🙋
+**Last updated:** 2025-12-28 — v1.0 minimal token-first edition
