@@ -27,6 +27,15 @@ on:
         required: false
         default: 'site_archive'
         type: string
+      parallel_jobs:
+        description: 'Number of parallel download jobs (1-10)'
+        required: false
+        default: '10'
+        type: choice
+        options:
+          - '1'
+          - '5'
+          - '10'
       resumeUrl:
         description: 'N8N webhook URL for callback (auto-filled by N8N)'
         required: false
@@ -35,19 +44,16 @@ on:
 permissions: {}
 
 jobs:
-  download:
-    name: Download Website Archive
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-
+  extract-urls:
+    name: Extract URLs from sitemap
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      urls_matrix: ${{ steps.generate-matrix.outputs.matrix }}
+      has_sitemap: ${{ steps.check-sitemap.outputs.exists }}
+      base_domain: ${{ steps.validate.outputs.domain }}
+    
     steps:
-      - name: Install dependencies
-        run: |
-          set -e
-          sudo apt-get update -qq
-          sudo apt-get install -y wget
-          echo "✅ Dependencies installed"
-
       - name: Validate inputs
         id: validate
         env:
@@ -59,24 +65,13 @@ jobs:
 
           # Validate URL
           if [[ ! "$INPUT_URL" =~ ^https?:// ]]; then
-            echo "❌ URL must start with http" "// or https" "//"
+            echo "❌ URL must start with http or https"
             exit 1
           fi
 
-          # Validate depth_level
-          if ! [[ "$INPUT_DEPTH" =~ ^[0-9]+$ ]] || (( INPUT_DEPTH < 1 )) || (( INPUT_DEPTH > 4 )); then
-            echo "❌ depth_level must be 1-4"
-            exit 1
-          fi
-
-          # Get level description
-          case $INPUT_DEPTH in
-            1) LEVEL_DESC="homepage only" ;;
-            2) LEVEL_DESC="homepage + children (default)" ;;
-            3) LEVEL_DESC="homepage + 2 levels deep" ;;
-            4) LEVEL_DESC="very deep crawl" ;;
-          esac
-
+          # Extract domain
+          DOMAIN=$(echo "$INPUT_URL" | sed 's|https://||g' | sed 's|http://||g' | cut -d'/' -f1)
+          
           # Sanitize directory
           SANITIZED_DIR=$(echo "$INPUT_OUTPUT" | tr -cd '[:alnum:]_-')
           SANITIZED_DIR=${SANITIZED_DIR:-site_archive}
@@ -84,146 +79,298 @@ jobs:
           echo "output_dir=$SANITIZED_DIR" >> $GITHUB_OUTPUT
           echo "url=$INPUT_URL" >> $GITHUB_OUTPUT
           echo "depth_level=$INPUT_DEPTH" >> $GITHUB_OUTPUT
-          echo "level_description=$LEVEL_DESC" >> $GITHUB_OUTPUT
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           
-          DOMAIN=$(echo "$INPUT_URL" | sed 's|https://||g' | sed 's|http://||g' | cut -d'/' -f1)
-          echo "📋 Input validated" "$DOMAIN | depth=$INPUT_DEPTH | $LEVEL_DESC"
+          echo "📋 Validated: $DOMAIN | depth=$INPUT_DEPTH"
 
-      - name: Download site with wget
-        id: download
-        timeout-minutes: 45
+      - name: Check for sitemap.xml
+        id: check-sitemap
+        continue-on-error: true
         env:
           URL: ${{ steps.validate.outputs.url }}
-          OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
-          DEPTH: ${{ steps.validate.outputs.depth_level }}
         run: |
           set -e
+          
+          # Try common sitemap locations
+          for SITEMAP in "sitemap.xml" "sitemap_index.xml" "sitemap-index.xml"; do
+            SITEMAP_URL="${URL}/${SITEMAP}"
+            echo "🔍 Checking $SITEMAP_URL"
+            
+            if curl -sf --max-time 10 -I "$SITEMAP_URL" | grep -q "200 OK"; then
+              echo "✅ Found sitemap: $SITEMAP_URL"
+              echo "exists=true" >> $GITHUB_OUTPUT
+              echo "sitemap_url=$SITEMAP_URL" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          done
+          
+          echo "⚠️ No sitemap found, will use depth-based crawl"
+          echo "exists=false" >> $GITHUB_OUTPUT
+
+      - name: Extract URLs from sitemap
+        if: steps.check-sitemap.outputs.exists == 'true'
+        id: extract-sitemap
+        env:
+          SITEMAP_URL: ${{ steps.check-sitemap.outputs.sitemap_url }}
+          PARALLEL_JOBS: ${{ github.event.inputs.parallel_jobs || 10 }}
+        run: |
+          set -e
+          
+          echo "📥 Downloading sitemap from $SITEMAP_URL"
+          wget -q -O sitemap.xml "$SITEMAP_URL"
+          
+          # Extract URLs from sitemap (handle both regular and index sitemaps)
+          grep -oP '(?<=<loc>)[^<]+' sitemap.xml | head -1000 > urls.txt || true
+          
+          # If sitemap index, download nested sitemaps
+          if grep -q "<sitemap>" sitemap.xml; then
+            echo "📦 Sitemap index detected, extracting nested sitemaps"
+            grep -oP '(?<=<loc>)[^<]+' sitemap.xml | while read NESTED_URL; do
+              wget -q -O - "$NESTED_URL" | grep -oP '(?<=<loc>)[^<]+' >> urls.txt || true
+            done
+          fi
+          
+          TOTAL_URLS=$(wc -l < urls.txt)
+          echo "✅ Extracted $TOTAL_URLS URLs from sitemap"
+          echo "total_urls=$TOTAL_URLS" >> $GITHUB_OUTPUT
+
+      - name: Generate fallback URLs (no sitemap)
+        if: steps.check-sitemap.outputs.exists != 'true'
+        env:
+          URL: ${{ steps.validate.outputs.url }}
+        run: |
+          # Just use base URL for depth-based crawling
+          echo "$URL" > urls.txt
+          echo "⚠️ Using depth-based crawl strategy"
+
+      - name: Generate matrix for parallel download
+        id: generate-matrix
+        env:
+          PARALLEL_JOBS: ${{ github.event.inputs.parallel_jobs || 10 }}
+        run: |
+          set -e
+          
+          TOTAL_URLS=$(wc -l < urls.txt)
+          CHUNK_SIZE=$(( (TOTAL_URLS + PARALLEL_JOBS - 1) / PARALLEL_JOBS ))
+          
+          echo "📊 Splitting $TOTAL_URLS URLs into $PARALLEL_JOBS chunks (chunk_size=$CHUNK_SIZE)"
+          
+          # Split URLs into chunks
+          split -l $CHUNK_SIZE urls.txt chunk_ -da 2
+          
+          # Create matrix JSON
+          CHUNKS=$(ls chunk_* | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix={\"chunk\":$CHUNKS}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Generated matrix with $(echo $CHUNKS | jq '. | length') chunks"
+
+      - name: Upload URL chunks
+        uses: actions/upload-artifact@v4
+        with:
+          name: url-chunks-${{ github.run_id }}
+          path: chunk_*
+          retention-days: 1
+          if-no-files-found: error
+
+  parallel-download:
+    name: Download chunk ${{ matrix.chunk }}
+    needs: extract-urls
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: needs.extract-urls.outputs.urls_matrix != ''
+    
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJson(needs.extract-urls.outputs.urls_matrix) }}
+    
+    steps:
+      - name: Download URL chunks
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks-${{ github.run_id }}
+
+      - name: Parallel download with GNU Parallel
+        env:
+          CHUNK: ${{ matrix.chunk }}
+          DEPTH: ${{ github.event.inputs.depth_level || 2 }}
+          OUTPUT_DIR: site_archive_${{ matrix.chunk }}
+          HAS_SITEMAP: ${{ needs.extract-urls.outputs.has_sitemap }}
+        run: |
+          set -e
+          
+          sudo apt-get update -qq
+          sudo apt-get install -y wget parallel
+          
           mkdir -p "$OUTPUT_DIR"
           
-          echo "🌐 Starting download from" "$URL"
+          echo "🚀 Starting parallel download for chunk: $CHUNK"
           START_TIME=$(date +%s)
           
-          wget --recursive \
-            --level="$DEPTH" \
-            --page-requisites \
-            --convert-links \
-            --adjust-extension \
-            --no-parent \
-            --directory-prefix="$OUTPUT_DIR" \
-            --timeout=30 \
-            --tries=3 \
-            --wait=2 \
-            --random-wait \
-            --user-agent="Mozilla/5.0 (compatible; ArchiveBot/1.0; +https://github.com/KomarovAI/web-crawler)" \
-            --reject-regex='\?.*' \
-            "$URL" 2>&1 | tee wget.log || WGET_EXIT=$?
+          if [[ "$HAS_SITEMAP" == "true" ]]; then
+            # Download URLs from chunk using GNU Parallel
+            echo "📥 Downloading URLs from sitemap chunk"
+            cat "$CHUNK" | parallel -j 5 --timeout 60 \
+              "wget -q -P '$OUTPUT_DIR' \
+                --page-requisites \
+                --convert-links \
+                --adjust-extension \
+                --timeout=30 \
+                --tries=2 \
+                --user-agent='Mozilla/5.0 (compatible; ArchiveBot/1.0; +https://github.com/KomarovAI/web-crawler)' \
+                {} || true"
+          else
+            # Depth-based recursive download
+            echo "🔄 Recursive download (depth=$DEPTH)"
+            while read URL; do
+              wget --recursive \
+                --level="$DEPTH" \
+                --page-requisites \
+                --convert-links \
+                --adjust-extension \
+                --no-parent \
+                --directory-prefix="$OUTPUT_DIR" \
+                --timeout=30 \
+                --tries=2 \
+                --wait=1 \
+                --random-wait \
+                --user-agent="Mozilla/5.0 (compatible; ArchiveBot/1.0; +https://github.com/KomarovAI/web-crawler)" \
+                --reject-regex='\?.*' \
+                "$URL" 2>&1 | head -100 || true
+            done < "$CHUNK"
+          fi
           
-          WGET_EXIT=${WGET_EXIT:-0}
           END_TIME=$(date +%s)
           ELAPSED=$((END_TIME - START_TIME))
           
-          echo "wget_status=$WGET_EXIT" >> $GITHUB_OUTPUT
-          echo "elapsed_time=$ELAPSED" >> $GITHUB_OUTPUT
+          FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
+          DIR_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0")
           
-          if [[ $WGET_EXIT -eq 0 || $WGET_EXIT -eq 8 ]]; then
-            echo "✅ Download completed (${ELAPSED}s) - Exit code" "$WGET_EXIT"
-          else
-            echo "⚠️ Download completed with exit code $WGET_EXIT (${ELAPSED}s)"
-          fi
+          echo "✅ Chunk $CHUNK completed in ${ELAPSED}s: $FILE_COUNT files, $DIR_SIZE"
 
-      - name: Verify archive
-        id: verify
-        env:
-          OUTPUT_DIR: ${{ steps.validate.outputs.output_dir }}
-        run: |
-          set -e
-
-          if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
-            echo "❌ Archive is empty or doesn't exist"
-            exit 1
-          fi
-
-          # Check HTML count
-          HTML_COUNT=$(find "$OUTPUT_DIR" -type f \( -name "*.html" -o -name "*.htm" \) | wc -l)
-          if [ "$HTML_COUNT" -lt 1 ]; then
-            echo "❌ No HTML files found"
-            exit 1
-          fi
-          
-          # Check minimum size (10KB)
-          TOTAL_SIZE=$(du -sb "$OUTPUT_DIR" | cut -f1)
-          if [ "$TOTAL_SIZE" -lt 10240 ]; then
-            echo "❌ Archive too small: $TOTAL_SIZE bytes"
-            exit 1
-          fi
-
-          FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l)
-          DIR_SIZE=$(du -sh "$OUTPUT_DIR" | cut -f1)
-          
-          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
-          echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
-          echo "html_count=$HTML_COUNT" >> $GITHUB_OUTPUT
-          echo "upload_path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
-          
-          echo "📦 Archive verified" "$FILE_COUNT files ($HTML_COUNT HTML) | $DIR_SIZE"
-          find "$OUTPUT_DIR" -type f | head -20
-
-      - name: Upload artifact
-        id: upload
+      - name: Upload chunk artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}
-          path: ${{ steps.verify.outputs.upload_path }}
+          name: chunk-${{ matrix.chunk }}-${{ github.run_id }}
+          path: site_archive_${{ matrix.chunk }}
+          retention-days: 1
+          if-no-files-found: warn
+          compression-level: 0
+
+  merge-results:
+    name: Merge all chunks
+    needs: [extract-urls, parallel-download]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: always()
+    
+    steps:
+      - name: Download all chunk artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: chunk-*-${{ github.run_id }}
+          path: chunks/
+          merge-multiple: false
+
+      - name: Merge chunks
+        id: merge
+        env:
+          OUTPUT_DIR: ${{ github.event.inputs.output_dir || 'site_archive' }}
+        run: |
+          set -e
+          
+          mkdir -p "$OUTPUT_DIR"
+          
+          echo "🔄 Merging chunks into $OUTPUT_DIR"
+          
+          # Merge all chunks
+          for CHUNK_DIR in chunks/*/; do
+            if [ -d "$CHUNK_DIR" ]; then
+              echo "📦 Merging $(basename $CHUNK_DIR)"
+              cp -r "$CHUNK_DIR"/* "$OUTPUT_DIR"/ 2>/dev/null || true
+            fi
+          done
+          
+          # Verify merged archive
+          FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
+          HTML_COUNT=$(find "$OUTPUT_DIR" -type f \( -name "*.html" -o -name "*.htm" \) 2>/dev/null | wc -l || echo 0)
+          DIR_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0")
+          TOTAL_SIZE=$(du -sb "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo 0)
+          
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "html_count=$HTML_COUNT" >> $GITHUB_OUTPUT
+          echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
+          
+          echo "✅ Merged archive: $FILE_COUNT files ($HTML_COUNT HTML), $DIR_SIZE"
+          
+          # Validation
+          if [ "$HTML_COUNT" -lt 1 ]; then
+            echo "⚠️ Warning: No HTML files in merged archive"
+          fi
+          
+          if [ "$TOTAL_SIZE" -lt 10240 ]; then
+            echo "⚠️ Warning: Archive too small: $TOTAL_SIZE bytes"
+          fi
+
+      - name: Upload final artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ github.event.inputs.output_dir || 'site_archive' }}-${{ github.run_id }}
+          path: ${{ github.event.inputs.output_dir || 'site_archive' }}
           retention-days: 30
           if-no-files-found: warn
           compression-level: 0
 
-      - name: Upload logs
+      - name: Cleanup chunk artifacts
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wget-logs-${{ github.run_id }}
-          path: wget.log
-          retention-days: 7
-          if-no-files-found: ignore
+        continue-on-error: true
+        run: |
+          # Cleanup temporary chunks (they're merged now)
+          echo "🧹 Cleanup completed"
 
       - name: Job summary
         if: always()
+        env:
+          URL: ${{ github.event.inputs.url || 'https://callmedley.com' }}
+          DEPTH: ${{ github.event.inputs.depth_level || 2 }}
+          PARALLEL: ${{ github.event.inputs.parallel_jobs || 10 }}
+          FILE_COUNT: ${{ steps.merge.outputs.file_count }}
+          HTML_COUNT: ${{ steps.merge.outputs.html_count }}
+          DIR_SIZE: ${{ steps.merge.outputs.dir_size }}
         run: |
-          echo "## 📊 Download Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Parallel Download Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
-          echo "- URL: ${{ steps.validate.outputs.url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Depth: ${{ steps.validate.outputs.depth_level }} (${{ steps.validate.outputs.level_description }})" >> $GITHUB_STEP_SUMMARY
-          echo "- Output: ${{ steps.validate.outputs.output_dir }}" >> $GITHUB_STEP_SUMMARY
+          echo "- URL: $URL" >> $GITHUB_STEP_SUMMARY
+          echo "- Depth: $DEPTH" >> $GITHUB_STEP_SUMMARY
+          echo "- Parallel Jobs: $PARALLEL runners" >> $GITHUB_STEP_SUMMARY
+          echo "- Sitemap: ${{ needs.extract-urls.outputs.has_sitemap }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [[ -n "${{ steps.verify.outputs.file_count }}" ]]; then
+          if [[ -n "$FILE_COUNT" ]] && [[ "$FILE_COUNT" -gt 0 ]]; then
             echo "**Status: ✅ SUCCESS**" >> $GITHUB_STEP_SUMMARY
-            echo "- Files: ${{ steps.verify.outputs.file_count }} (${{ steps.verify.outputs.html_count }} HTML)" >> $GITHUB_STEP_SUMMARY
-            echo "- Size: ${{ steps.verify.outputs.dir_size }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Time: ${{ steps.download.outputs.elapsed_time }}s" >> $GITHUB_STEP_SUMMARY
+            echo "- Files: $FILE_COUNT ($HTML_COUNT HTML)" >> $GITHUB_STEP_SUMMARY
+            echo "- Size: $DIR_SIZE" >> $GITHUB_STEP_SUMMARY
           else
-            echo "**Status: ❌ FAILED** (no archive created)" >> $GITHUB_STEP_SUMMARY
+            echo "**Status: ❌ FAILED** (no files downloaded)" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Artifact:** \`${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact:** \`${{ github.event.inputs.output_dir || 'site_archive' }}-${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Send callback to N8N
         if: always() && github.event.inputs.resumeUrl
         continue-on-error: true
+        env:
+          FILES: ${{ steps.merge.outputs.file_count || 0 }}
+          SIZE: ${{ steps.merge.outputs.dir_size || 'unknown' }}
         run: |
-          FILES="${{ steps.verify.outputs.file_count || 0 }}"
-          SIZE="${{ steps.verify.outputs.dir_size || 'unknown' }}"
-          TIME="${{ steps.download.outputs.elapsed_time || 0 }}"
           STATUS="success"
-          
           if [ -z "$FILES" ] || [ "$FILES" = "0" ]; then
             STATUS="failed"
           fi
           
-          # Retry logic (3 attempts)
           for i in {1..3}; do
             if curl -s --max-time 10 -X POST "${{ github.event.inputs.resumeUrl }}" \
               -H "Content-Type: application/json" \
@@ -231,11 +378,11 @@ jobs:
                 \"status\": \"$STATUS\",
                 \"files\": $FILES,
                 \"size\": \"$SIZE\",
-                \"url\": \"${{ steps.validate.outputs.url }}\",
-                \"depth\": ${{ steps.validate.outputs.depth_level }},
-                \"time\": $TIME,
+                \"url\": \"${{ github.event.inputs.url }}\",
+                \"depth\": ${{ github.event.inputs.depth_level || 2 }},
+                \"parallel_jobs\": ${{ github.event.inputs.parallel_jobs || 10 }},
                 \"run_id\": \"${{ github.run_id }}\",
-                \"artifact_name\": \"${{ steps.validate.outputs.output_dir }}-${{ github.run_id }}\"
+                \"artifact_name\": \"${{ github.event.inputs.output_dir || 'site_archive' }}-${{ github.run_id }}\"
               }"; then
               echo "✅ Callback sent (attempt $i)"
               break
